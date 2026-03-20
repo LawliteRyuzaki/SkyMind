@@ -1,33 +1,41 @@
-# Pin pydantic-core explicitly to avoid Python 3.14 build failure
-pydantic-core==2.14.6
-pydantic==2.5.3
-pydantic-settings==2.1.0
+# Core backend
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Database
+supabase
+sqlalchemy
+psycopg2-binary
+alembic
+
+# Auth & security
+python-jose[cryptography]
+passlib[bcrypt]
+python-dotenv
+
+# HTTP & async
+httpx
+aiohttp
+tenacity
+
+# AI / ML
+scikit-learn
+pandas
+numpy
+joblib
+prophet
+
+# Payments & integrations
+razorpay
+twilio
+redis
+
+# Scheduler
+apscheduler
+
+# Pydantic
+pydantic
+pydantic-settings
+pydantic-core
 pydantic[email]
-email-validator>=2.1.0
-
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
-python-multipart==0.0.7
-python-dotenv==1.0.0
-httpx==0.26.0
-
-sqlalchemy==2.0.25
-alembic==1.13.1
-psycopg2-binary==2.9.9
-supabase==2.3.4
-
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-
-numpy>=1.26.0,<2.0.0
-pandas>=2.1.0,<2.3.0
-scikit-learn>=1.4.0,<1.6.0
-joblib>=1.3.0,<1.5.0
-prophet>=1.1.5,<1.2.0
-
-aiohttp>=3.9.0,<3.12.0
-apscheduler>=3.10.0,<3.12.0
-razorpay>=1.3.0,<1.5.0
-twilio>=8.10.0,<10.0.0
-tenacity>=8.2.0,<9.0.0
-redis>=5.0.0,<6.0.0
