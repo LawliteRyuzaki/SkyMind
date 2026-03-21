@@ -79,3 +79,9 @@ app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 # Notifications router
 from routers.notifications import router as notifications_router
 app.include_router(notifications_router, prefix="/notifications", tags=["Notifications"])
+
+allow_origins=[
+    "http://localhost:3000",
+    "https://*.vercel.app",
+    "https://skymind.onrender.com",
+],
