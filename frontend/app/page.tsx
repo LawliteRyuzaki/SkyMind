@@ -34,7 +34,7 @@ export default function HomePage() {
         <div className="hero-left a1">
           <div className="hero-issue">Vol. 1 — AI Flight Intelligence Platform</div>
           <h1 className="hero-title">
-            FLY<br/>SMART<br/>ER
+            FLY<br/>SMARTER
             <span className="red-line">with artificial<br/>intelligence.</span>
           </h1>
           <p className="hero-desc">ML models predict the exact moment to book. Dijkstra's algorithm finds hidden routes that direct search completely misses. You just pack your bags.</p>
