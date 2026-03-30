@@ -44,8 +44,8 @@ function FlightsContent() {
       setFlights(sorted)
     } catch(e:any) {
       const msg = e.message || ''
-      if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed')) {
-        setError('Cannot connect to backend. Make sure Render is running.')
+      if (msg.includes('fetch') || msg.includes('network') || msg.includes('Failed') || msg.includes('connect')) {
+        setError('Cannot connect to backend. Make sure the API server is running.')
       } else {
         setError(msg || 'Search failed. Try a different date or route.')
       }

@@ -1,12 +1,12 @@
 """
 SkyMind – Flight Price Predictor (FIXED)
 =========================================
-Fixes:
-  1. No random noise — fully deterministic forecasts
-  2. Trend from linear regression slope over forecast window
-  3. Probability = fraction of forecast steps that are increasing
-  4. Confidence interval uses rolling std dev (not hardcoded)
-  5. Recommendation derived from trend + probability (not days_until_departure)
+Deterministic forecast using:
+  1. Route-hash seeded base price
+  2. Linear trend from slope (derived from route hash)
+  3. Weekly sinusoidal seasonality
+  4. CI from rolling std dev
+  5. Recommendation from trend + probability
   6. expected_change_percent from first→last forecast price
 """
 

@@ -5,6 +5,7 @@
 //   2. Loading + error state management
 //   3. Simple in-memory cache (keyed by origin+destination)
 //   4. Returns typed PredictionResult – no hardcoded fallbacks
+//   5. Stale response guard via activeReqRef
 // =====================================================================
 
 import { useState, useCallback, useRef } from "react";
@@ -31,13 +32,12 @@ export function usePrediction(): UsePredictionReturn {
   const [error, setError] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeReqRef = useRef<string | null>(null); // prevent stale responses
+  const activeReqRef = useRef<string | null>(null);
 
   const predict = useCallback((req: PredictRequest) => {
-    // Clear previous debounce
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
-    // Basic client-side validation
+    // Client-side validation
     if (!req.origin.trim() || !req.destination.trim()) {
       setError("Please enter both origin and destination.");
       return;
@@ -49,7 +49,7 @@ export function usePrediction(): UsePredictionReturn {
 
     const cacheKey = `${req.origin.toUpperCase()}-${req.destination.toUpperCase()}`;
 
-    // Return cached result immediately (no loading flash)
+    // Return cached result immediately
     if (cache.has(cacheKey)) {
       setResult(cache.get(cacheKey)!);
       setError(null);
@@ -67,7 +67,6 @@ export function usePrediction(): UsePredictionReturn {
       try {
         const data = await predictPrice(req);
 
-        // Ignore if a newer request was fired while this one was in-flight
         if (activeReqRef.current !== reqId) return;
 
         cache.set(cacheKey, data);
@@ -78,7 +77,7 @@ export function usePrediction(): UsePredictionReturn {
         if (err instanceof ApiError) {
           setError(err.message);
         } else {
-          setError("An unexpected error occurred. Please try again.");
+          setError("Could not connect to backend. Make sure the API server is running.");
         }
       } finally {
         if (activeReqRef.current === reqId) setLoading(false);

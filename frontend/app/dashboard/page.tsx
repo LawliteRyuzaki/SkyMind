@@ -3,43 +3,52 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import NavBar from '@/components/layout/NavBar'
-import { supabase } from '@/lib/supabase'
+
+const DEMO_BOOKINGS = [
+  { id:'1', booking_reference:'SKY25J4R2X', status:'CONFIRMED', origin_code:'DEL', destination_code:'DXB', contact_email:'user@gmail.com', total_price:28450, created_at:new Date().toISOString() },
+  { id:'2', booking_reference:'SKY25K1M7P', status:'PENDING',   origin_code:'BOM', destination_code:'LHR', contact_email:'user@gmail.com', total_price:52300, created_at:new Date().toISOString() },
+]
+const DEMO_ALERTS = [
+  { id:'1', origin_code:'DEL', destination_code:'DXB', departure_date:'2025-05-15', target_price:26000, last_price:24100, is_triggered:true },
+  { id:'2', origin_code:'BOM', destination_code:'SIN', departure_date:'2025-07-10', target_price:18000, last_price:22400, is_triggered:false },
+]
 
 export default function DashboardPage() {
   const router = useRouter()
-  const [bookings,  setBookings]  = useState<any[]>([])
-  const [alerts,    setAlerts]    = useState<any[]>([])
-  const [loading,   setLoading]   = useState(true)
+  const [bookings, setBookings] = useState<any[]>([])
+  const [alerts,   setAlerts]   = useState<any[]>([])
+  const [loading,  setLoading]  = useState(true)
 
   useEffect(() => {
+    let mounted = true
     const load = async () => {
       setLoading(true)
       try {
-        const [{ data: bk }, { data: al }] = await Promise.all([
-          supabase.from('bookings').select('*').order('created_at',{ascending:false}).limit(10),
-          supabase.from('price_alerts').select('*').eq('is_active',true).limit(5),
+        const { supabase } = await import('@/lib/supabase')
+        const [{ data: bk, error: bkErr }, { data: al, error: alErr }] = await Promise.all([
+          supabase.from('bookings').select('*').order('created_at', { ascending: false }).limit(10),
+          supabase.from('price_alerts').select('*').eq('is_active', true).limit(5),
         ])
-        setBookings(bk || [])
-        setAlerts(al || [])
-      } catch(e) {}
-      setLoading(false)
+        if (mounted) {
+          setBookings((!bkErr && bk && bk.length > 0) ? bk : DEMO_BOOKINGS)
+          setAlerts((!alErr && al && al.length > 0) ? al : DEMO_ALERTS)
+        }
+      } catch {
+        if (mounted) {
+          setBookings(DEMO_BOOKINGS)
+          setAlerts(DEMO_ALERTS)
+        }
+      } finally {
+        if (mounted) setLoading(false)
+      }
     }
     load()
+    return () => { mounted = false }
   }, [])
 
   const PLANE = <svg width="12" height="12" viewBox="0 0 24 24" fill="var(--red)"><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19.5 2.5S18 2 16.5 3.5L13 7 4.8 6.2c-.5-.1-.9.1-1.1.5L2 8.9c-.2.4-.1.9.2 1.2l4.6 4.1-1.5 6.4 2.8 2.8 5.3-3.2 4.1 4.6c.3.4.8.5 1.2.2l1.1-1.2c.4-.2.6-.6.5-1.1z"/></svg>
 
-  const statusClass = (s:string) => s==='CONFIRMED'?'badge-green':s==='PENDING'?'badge-amber':'badge-off'
-
-  // Fallback demo data if DB empty
-  const displayBookings = bookings.length ? bookings : [
-    { id:'1', booking_reference:'SKY25J4R2X', status:'CONFIRMED', origin_code:'DEL', destination_code:'DXB', contact_email:'rohan@gmail.com', total_price:28450, created_at:new Date().toISOString() },
-    { id:'2', booking_reference:'SKY25K1M7P', status:'PENDING',   origin_code:'BOM', destination_code:'LHR', contact_email:'rohan@gmail.com', total_price:52300, created_at:new Date().toISOString() },
-  ]
-  const displayAlerts = alerts.length ? alerts : [
-    { id:'1', origin_code:'DEL', destination_code:'DXB', departure_date:'2025-05-15', target_price:26000, last_price:24100, is_triggered:true },
-    { id:'2', origin_code:'BOM', destination_code:'SIN', departure_date:'2025-07-10', target_price:18000, last_price:22400, is_triggered:false },
-  ]
+  const statusClass = (s: string) => s==='CONFIRMED'?'badge-green':s==='PENDING'?'badge-amber':'badge-off'
 
   return (
     <div>
@@ -65,9 +74,9 @@ export default function DashboardPage() {
           <div style={{ marginTop:'28px' }}>
             <div className="dash-stats">
               {[
-                { icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19.5 2.5S18 2 16.5 3.5L13 7 4.8 6.2c-.5-.1-.9.1-1.1.5L2 8.9c-.2.4-.1.9.2 1.2l4.6 4.1-1.5 6.4 2.8 2.8 5.3-3.2 4.1 4.6c.3.4.8.5 1.2.2l1.1-1.2c.4-.2.6-.6.5-1.1z"/></svg>, val: String(displayBookings.length), label:'Total flights' },
-                { icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>, val:`₹${(displayBookings.reduce((a,b)=>a+(b.total_price||0),0)/1000).toFixed(1)}k`, label:'Total spent' },
-                { icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>, val: String(displayAlerts.length), label:'Active alerts' },
+                { icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19.5 2.5S18 2 16.5 3.5L13 7 4.8 6.2c-.5-.1-.9.1-1.1.5L2 8.9c-.2.4-.1.9.2 1.2l4.6 4.1-1.5 6.4 2.8 2.8 5.3-3.2 4.1 4.6c.3.4.8.5 1.2.2l1.1-1.2c.4-.2.6-.6.5-1.1z"/></svg>, val: String(bookings.length), label:'Total flights' },
+                { icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>, val:`₹${(bookings.reduce((a,b)=>a+(b.total_price||0),0)/1000).toFixed(1)}k`, label:'Total spent' },
+                { icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>, val: String(alerts.length), label:'Active alerts' },
                 { icon:<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="6"/><path d="M15.477 12.89L17 22l-5-3-5 3 1.523-9.11"/></svg>, val:'12.8K', label:'Points' },
               ].map(s => (
                 <div key={s.label} className="dash-stat">
@@ -84,7 +93,7 @@ export default function DashboardPage() {
               <div>
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'14px' }}>
                   <h2 style={{ fontFamily:'var(--fd)', fontSize:'1.3rem', letterSpacing:'.04em', color:'var(--black)' }}>MY TRIPS</h2>
-                  <span style={{ fontSize:'.75rem', color:'var(--grey3)', fontFamily:'var(--fm)' }}>{displayBookings.length} bookings</span>
+                  <span style={{ fontSize:'.75rem', color:'var(--grey3)', fontFamily:'var(--fm)' }}>{bookings.length} bookings</span>
                 </div>
 
                 {loading && [0,1].map(i=>(
@@ -95,7 +104,7 @@ export default function DashboardPage() {
                   </div>
                 ))}
 
-                {!loading && displayBookings.map((b,i) => (
+                {!loading && bookings.map((b,i) => (
                   <div key={b.id} className="booking-card" style={{ borderColor:i===0?'var(--black)':undefined }} onClick={()=>router.push('/booking')}>
                     <div className="bk-head">
                       <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
@@ -125,9 +134,9 @@ export default function DashboardPage() {
                 <div className="sidebar-card">
                   <div className="sidebar-head">
                     <span className="sidebar-title">Price Alerts</span>
-                    <span className="badge badge-red">{displayAlerts.length} active</span>
+                    <span className="badge badge-red">{alerts.length} active</span>
                   </div>
-                  {displayAlerts.map(a => (
+                  {alerts.map(a => (
                     <div key={a.id} className="alert-item">
                       <div className="alert-route">
                         {a.origin_code} <span style={{color:'var(--grey3)'}}>→</span> {a.destination_code}

@@ -2,7 +2,6 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { format, addDays } from 'date-fns'
-import { supabase } from '@/lib/supabase'
 
 const META: Record<string,{img:string;tag:string;tagClass:string}> = {
   BOM:{ img:'https://images.unsplash.com/photo-1570168007204-dfb528c6958f?w=600&q=80&auto=format&fit=crop', tag:'Popular', tagClass:'badge-red' },
@@ -17,31 +16,55 @@ const META: Record<string,{img:string;tag:string;tagClass:string}> = {
 }
 const fb = 'https://images.unsplash.com/photo-1436491865332-7a61a109cc05?w=600&q=80&auto=format&fit=crop'
 
-interface RouteRow { origin_code:string; destination_code:string; dest_city:string; dest_state:string|null; min_price_inr:number; avg_price_inr:number; flights_per_day:number; avg_duration_min:number }
+interface RouteRow {
+  origin_code: string
+  destination_code: string
+  dest_city: string
+  dest_state: string | null
+  min_price_inr: number
+  avg_price_inr: number
+  flights_per_day: number
+  avg_duration_min: number
+}
+
+const FALLBACK: RouteRow[] = [
+  { origin_code:'DEL', destination_code:'BOM', dest_city:'Mumbai', dest_state:'Maharashtra', min_price_inr:4299, avg_price_inr:6200, flights_per_day:18, avg_duration_min:130 },
+  { origin_code:'DEL', destination_code:'GOI', dest_city:'Goa', dest_state:'Goa', min_price_inr:3899, avg_price_inr:5800, flights_per_day:12, avg_duration_min:150 },
+  { origin_code:'DEL', destination_code:'BLR', dest_city:'Bengaluru', dest_state:'Karnataka', min_price_inr:5199, avg_price_inr:7100, flights_per_day:22, avg_duration_min:165 },
+]
 
 export default function PopularDestinations() {
   const [routes, setRoutes] = useState<RouteRow[]>([])
   const [loading, setLoading] = useState(true)
-  const dep = format(addDays(new Date(),30),'yyyy-MM-dd')
+  const dep = format(addDays(new Date(), 30), 'yyyy-MM-dd')
 
   useEffect(() => {
-    supabase.from('v_domestic_routes').select('*').eq('origin_code','DEL').order('flights_per_day',{ascending:false}).limit(3)
-      .then(({ data, error }) => {
-        if (error || !data?.length) {
-          supabase.from('v_domestic_routes').select('*').order('flights_per_day',{ascending:false}).limit(3)
-            .then(({ data:d }) => { setRoutes((d||[]) as RouteRow[]); setLoading(false) })
-        } else { setRoutes(data as RouteRow[]); setLoading(false) }
-      })
+    let mounted = true
+    const load = async () => {
+      try {
+        const { supabase } = await import('@/lib/supabase')
+        const { data, error } = await supabase
+          .from('v_domestic_routes')
+          .select('*')
+          .eq('origin_code', 'DEL')
+          .order('flights_per_day', { ascending: false })
+          .limit(3)
+
+        if (!mounted) return
+        if (!error && data && data.length > 0) {
+          setRoutes(data as RouteRow[])
+        } else {
+          setRoutes(FALLBACK)
+        }
+      } catch {
+        if (mounted) setRoutes(FALLBACK)
+      } finally {
+        if (mounted) setLoading(false)
+      }
+    }
+    load()
+    return () => { mounted = false }
   }, [])
-
-  // Fallback data if Supabase not connected
-  const FALLBACK: RouteRow[] = [
-    { origin_code:'DEL', destination_code:'BOM', dest_city:'Mumbai', dest_state:'Maharashtra', min_price_inr:4299, avg_price_inr:6200, flights_per_day:18, avg_duration_min:130 },
-    { origin_code:'DEL', destination_code:'GOI', dest_city:'Goa', dest_state:'Goa', min_price_inr:3899, avg_price_inr:5800, flights_per_day:12, avg_duration_min:150 },
-    { origin_code:'DEL', destination_code:'BLR', dest_city:'Bengaluru', dest_state:'Karnataka', min_price_inr:5199, avg_price_inr:7100, flights_per_day:22, avg_duration_min:165 },
-  ]
-
-  const data = routes.length ? routes : (loading ? [] : FALLBACK)
 
   if (loading) return (
     <div className="dest-grid">
@@ -57,6 +80,8 @@ export default function PopularDestinations() {
     </div>
   )
 
+  const data = routes.length ? routes : FALLBACK
+
   return (
     <div className="dest-grid">
       {data.map((r, i) => {
@@ -65,7 +90,9 @@ export default function PopularDestinations() {
         const dm = (r.avg_duration_min||90)%60
         const url = `/flights?origin=${r.origin_code}&destination=${r.destination_code}&departure_date=${dep}&adults=1&cabin_class=ECONOMY`
         return (
-          <Link key={`${r.origin_code}-${r.destination_code}`} href={url}
+          <Link
+            key={`${r.origin_code}-${r.destination_code}`}
+            href={url}
             className="dest-card"
             style={{ textDecoration:'none', color:'inherit', borderRight:i<2?'1px solid var(--grey1)':'none' }}
           >

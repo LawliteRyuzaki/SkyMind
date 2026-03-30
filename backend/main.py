@@ -1,12 +1,14 @@
 """
 SkyMind – FastAPI Backend (FIXED)
 ===================================
-Fixes:
+Fixed:
   1. POST /predict — real ML output, no static data
   2. POST /set-alert — in-memory alert store
   3. GET /check-alerts — compare predicted vs target, return triggered alerts
   4. CORS configured for local + Vercel
   5. Full error handling + validation
+  6. Health check endpoint
+  7. Proper router mounting
 """
 
 from fastapi import FastAPI, HTTPException
@@ -17,7 +19,6 @@ import uuid
 from datetime import datetime
 
 from ml.price_predictor import predictor
-
 
 # ---------------------------------------------------------------------------
 # App
@@ -32,7 +33,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "https://localhost:3000",
         "https://sky-mind-eta.vercel.app",
+        "https://*.vercel.app",
         "*",
     ],
     allow_credentials=True,
@@ -40,6 +43,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ---------------------------------------------------------------------------
+# Mount existing routers
+# ---------------------------------------------------------------------------
+try:
+    from routers import flights, prediction, booking, payment, auth, notifications, alerts, user
+    app.include_router(flights.router,       prefix="/flights",       tags=["flights"])
+    app.include_router(prediction.router,    prefix="/prediction",    tags=["prediction"])
+    app.include_router(booking.router,       prefix="/booking",       tags=["booking"])
+    app.include_router(payment.router,       prefix="/payment",       tags=["payment"])
+    app.include_router(auth.router,          prefix="/auth",          tags=["auth"])
+    app.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
+    app.include_router(alerts.router,        prefix="/alerts",        tags=["alerts"])
+    app.include_router(user.router,          prefix="/user",          tags=["user"])
+except Exception as e:
+    print(f"[WARN] Could not mount some routers: {e}")
 
 # ---------------------------------------------------------------------------
 # In-memory alert store  { alert_id: AlertRecord }
@@ -81,24 +99,22 @@ class SetAlertRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# Core endpoints
 # ---------------------------------------------------------------------------
 @app.get("/health")
 def health_check():
     return {"status": "ok", "service": "SkyMind AI API", "version": "2.0.0"}
 
 
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "SkyMind AI API — use /docs for API reference"}
+
+
 @app.post("/predict")
 def predict(body: PredictRequest):
     """
     Returns AI-driven flight price forecast and booking recommendation.
-
-    Request: { "origin": "DEL", "destination": "BOM" }
-    Response: {
-        predicted_price, forecast, trend,
-        probability_increase, confidence,
-        recommendation, reason, expected_change_percent
-    }
     """
     try:
         result = predictor.forecast_with_analysis(
@@ -119,10 +135,7 @@ def predict(body: PredictRequest):
 
 @app.post("/set-alert")
 def set_alert(body: SetAlertRequest):
-    """
-    Store a price alert in memory.
-    Returns alert_id for tracking.
-    """
+    """Store a price alert in memory."""
     origin = body.origin.strip().upper()
     destination = body.destination.strip().upper()
 
@@ -154,10 +167,7 @@ def set_alert(body: SetAlertRequest):
 
 @app.get("/check-alerts")
 def check_alerts():
-    """
-    Check all stored alerts against current predicted prices.
-    Returns list of triggered alerts (predicted_price <= target_price).
-    """
+    """Check all stored alerts against current predicted prices."""
     triggered = []
     all_alerts = []
 
@@ -184,7 +194,6 @@ def check_alerts():
                 triggered.append(enriched)
 
         except Exception:
-            # Skip broken alert rather than crashing the whole endpoint
             pass
 
     return {

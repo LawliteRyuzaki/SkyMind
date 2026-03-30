@@ -1,4 +1,4 @@
-// hooks/useAlerts.ts
+// hooks/useAlerts.ts (FIXED)
 // =====================================================================
 // Polls /check-alerts every 10 seconds.
 // Shows browser Notification + in-app toast when an alert is triggered.
@@ -26,7 +26,7 @@ interface UseAlertsReturn {
   lastChecked: Date | null;
 }
 
-// Track which alert IDs we've already notified so we don't spam
+// Track which alert IDs we've already notified
 const _notifiedIds = new Set<string>();
 
 export function useAlerts(): UseAlertsReturn {
@@ -57,9 +57,7 @@ export function useAlerts(): UseAlertsReturn {
   }, []);
 
   useEffect(() => {
-    // Initial check
     poll();
-    // Schedule polling
     timerRef.current = setInterval(poll, POLL_INTERVAL_MS);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -71,7 +69,7 @@ export function useAlerts(): UseAlertsReturn {
     setError(null);
     try {
       const res = await apiSetAlert(req);
-      await poll(); // refresh immediately
+      await poll();
       return { ok: true, message: res.message };
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Failed to set alert";
@@ -101,7 +99,6 @@ function _notify(alert: AlertRecord) {
   const title = `🎯 Price Alert: ${alert.origin} → ${alert.destination}`;
   const body = `Current price ₹${alert.current_price?.toLocaleString("en-IN")} is at or below your target ₹${alert.target_price.toLocaleString("en-IN")}!`;
 
-  // Browser Notification API
   if (typeof window !== "undefined" && "Notification" in window) {
     if (Notification.permission === "granted") {
       new Notification(title, { body, icon: "/favicon.ico" });
@@ -112,6 +109,5 @@ function _notify(alert: AlertRecord) {
     }
   }
 
-  // Fallback: console log (sonner toast wired in component layer)
   console.info("[SkyMind Alert]", title, body);
 }

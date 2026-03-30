@@ -2,14 +2,53 @@
 Flight search and listing endpoints.
 """
 
-from fastapi import APIRouter, Query, HTTPException, Depends
+from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 from datetime import datetime, date
 
 from services.amadeus import amadeus_service, parse_flight_offers
-from ml.price_model import get_predictor
 
 router = APIRouter()
+
+
+def get_ai_insight(origin: str, destination: str, days_until: int) -> dict:
+    """Get AI price insight for a route. Gracefully falls back if model unavailable."""
+    try:
+        from ml.price_predictor import predictor
+        result = predictor.forecast_with_analysis(origin=origin, destination=destination)
+        rec = result["recommendation"]
+        return {
+            "recommendation": rec,
+            "reason": result["reason"],
+            "probability_increase": result["probability_increase"],
+            "trend": result["trend"],
+        }
+    except Exception:
+        pass
+
+    try:
+        from ml.price_model import get_predictor
+        predictor_ml = get_predictor()
+        dep_date = datetime.today()
+        prediction = predictor_ml.predict(
+            days_until_departure=max(1, days_until),
+            departure_date=dep_date,
+            origin_code=origin,
+            destination_code=destination,
+        )
+        return {
+            "recommendation": prediction.get("recommendation", "MONITOR"),
+            "reason": prediction.get("reason", "Monitor prices for this route."),
+            "probability_increase": prediction.get("probability_increase", 0.5),
+            "trend": prediction.get("price_trend", "STABLE"),
+        }
+    except Exception:
+        return {
+            "recommendation": "MONITOR",
+            "reason": "Monitor prices for this route.",
+            "probability_increase": 0.5,
+            "trend": "STABLE",
+        }
 
 
 @router.get("/search")
@@ -38,24 +77,14 @@ async def search_flights(
         flights = parse_flight_offers(raw)
 
         # Enrich with AI price insights
-        predictor = get_predictor()
-        dep_date = datetime.strptime(departure_date, "%Y-%m-%d")
-        days_until = (dep_date.date() - date.today()).days
+        try:
+            dep_date = datetime.strptime(departure_date, "%Y-%m-%d")
+            days_until = (dep_date.date() - date.today()).days
+        except Exception:
+            days_until = 30
 
         for flight in flights:
-            prediction = predictor.predict(
-                days_until_departure=max(1, days_until),
-                departure_date=dep_date,
-                airline_code=flight["validating_airlines"][0] if flight["validating_airlines"] else "AI",
-                origin_code=origin,
-                destination_code=destination,
-            )
-            flight["ai_insight"] = {
-                "recommendation": prediction["recommendation"],
-                "reason": prediction["reason"],
-                "probability_increase": prediction["probability_increase"],
-                "trend": prediction["price_trend"],
-            }
+            flight["ai_insight"] = get_ai_insight(origin, destination, days_until)
 
         return {
             "flights": flights,
@@ -72,6 +101,45 @@ async def search_flights(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Flight search failed: {str(e)}")
+
+
+@router.get("/airports")
+async def search_airports(
+    q: str = Query(..., min_length=2, description="City or airport name"),
+):
+    """Search airports by city/name."""
+    AIRPORTS = [
+        {"iata": "DEL", "city": "New Delhi", "name": "Indira Gandhi International", "country": "India"},
+        {"iata": "BOM", "city": "Mumbai", "name": "Chhatrapati Shivaji Maharaj International", "country": "India"},
+        {"iata": "BLR", "city": "Bengaluru", "name": "Kempegowda International", "country": "India"},
+        {"iata": "MAA", "city": "Chennai", "name": "Chennai International", "country": "India"},
+        {"iata": "HYD", "city": "Hyderabad", "name": "Rajiv Gandhi International", "country": "India"},
+        {"iata": "CCU", "city": "Kolkata", "name": "Netaji Subhas Chandra Bose International", "country": "India"},
+        {"iata": "COK", "city": "Kochi", "name": "Cochin International", "country": "India"},
+        {"iata": "GOI", "city": "Goa", "name": "Goa International Airport", "country": "India"},
+        {"iata": "AMD", "city": "Ahmedabad", "name": "Sardar Vallabhbhai Patel International", "country": "India"},
+        {"iata": "JAI", "city": "Jaipur", "name": "Jaipur International", "country": "India"},
+        {"iata": "PNQ", "city": "Pune", "name": "Pune Airport", "country": "India"},
+        {"iata": "ATQ", "city": "Amritsar", "name": "Sri Guru Ram Dass Jee International", "country": "India"},
+        {"iata": "LKO", "city": "Lucknow", "name": "Chaudhary Charan Singh International", "country": "India"},
+        {"iata": "DXB", "city": "Dubai", "name": "Dubai International", "country": "UAE"},
+        {"iata": "LHR", "city": "London", "name": "Heathrow", "country": "UK"},
+        {"iata": "CDG", "city": "Paris", "name": "Charles de Gaulle", "country": "France"},
+        {"iata": "JFK", "city": "New York", "name": "John F. Kennedy International", "country": "USA"},
+        {"iata": "SIN", "city": "Singapore", "name": "Changi Airport", "country": "Singapore"},
+        {"iata": "BKK", "city": "Bangkok", "name": "Suvarnabhumi Airport", "country": "Thailand"},
+        {"iata": "IST", "city": "Istanbul", "name": "Istanbul Airport", "country": "Turkey"},
+        {"iata": "NRT", "city": "Tokyo", "name": "Narita International", "country": "Japan"},
+        {"iata": "DOH", "city": "Doha", "name": "Hamad International", "country": "Qatar"},
+    ]
+    q_lower = q.lower()
+    results = [
+        a for a in AIRPORTS
+        if q_lower in a["city"].lower()
+        or q_lower in a["iata"].lower()
+        or q_lower in a["name"].lower()
+    ]
+    return {"airports": results}
 
 
 @router.get("/inspiration")
@@ -98,35 +166,3 @@ async def cheapest_dates(
         return raw
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/airports")
-async def search_airports(
-    q: str = Query(..., min_length=2, description="City or airport name"),
-):
-    """Search airports by city/name (uses static list for now)."""
-    AIRPORTS = [
-        {"iata": "DEL", "city": "New Delhi", "name": "Indira Gandhi International", "country": "India"},
-        {"iata": "BOM", "city": "Mumbai", "name": "Chhatrapati Shivaji Maharaj International", "country": "India"},
-        {"iata": "BLR", "city": "Bengaluru", "name": "Kempegowda International", "country": "India"},
-        {"iata": "MAA", "city": "Chennai", "name": "Chennai International", "country": "India"},
-        {"iata": "HYD", "city": "Hyderabad", "name": "Rajiv Gandhi International", "country": "India"},
-        {"iata": "CCU", "city": "Kolkata", "name": "Netaji Subhas Chandra Bose International", "country": "India"},
-        {"iata": "DXB", "city": "Dubai", "name": "Dubai International", "country": "UAE"},
-        {"iata": "LHR", "city": "London", "name": "Heathrow", "country": "UK"},
-        {"iata": "CDG", "city": "Paris", "name": "Charles de Gaulle", "country": "France"},
-        {"iata": "JFK", "city": "New York", "name": "John F. Kennedy International", "country": "USA"},
-        {"iata": "SIN", "city": "Singapore", "name": "Changi Airport", "country": "Singapore"},
-        {"iata": "BKK", "city": "Bangkok", "name": "Suvarnabhumi Airport", "country": "Thailand"},
-        {"iata": "IST", "city": "Istanbul", "name": "Istanbul Airport", "country": "Turkey"},
-        {"iata": "NRT", "city": "Tokyo", "name": "Narita International", "country": "Japan"},
-        {"iata": "SYD", "city": "Sydney", "name": "Sydney Kingsford Smith", "country": "Australia"},
-    ]
-    q_lower = q.lower()
-    results = [
-        a for a in AIRPORTS
-        if q_lower in a["city"].lower()
-        or q_lower in a["iata"].lower()
-        or q_lower in a["name"].lower()
-    ]
-    return {"airports": results}
