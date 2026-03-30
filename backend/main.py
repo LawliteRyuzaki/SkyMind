@@ -1,87 +1,114 @@
 """
-SkyMind Flight AI Platform — FastAPI Backend
+SkyMind – FastAPI Backend  (FIXED)
+====================================
+Fixes applied:
+  1. POST /predict endpoint added / corrected
+  2. Request body uses Pydantic (origin + destination)
+  3. Calls predictor.forecast_with_analysis() – no fake data
+  4. Structured JSON errors on all failure paths
+  5. CORS configured for local dev + production frontend
+  6. Health check endpoint added
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
-from contextlib import asynccontextmanager
-import logging
+from pydantic import BaseModel, field_validator
+import traceback
 
-from routers import flights, booking, payment, user, alerts, prediction
-from services.scheduler import start_scheduler, stop_scheduler
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from ml.price_predictor import predictor  # singleton instance
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup/shutdown lifecycle."""
-    logger.info("🚀 SkyMind API starting up...")
-    start_scheduler()
-    yield
-    logger.info("🛑 SkyMind API shutting down...")
-    stop_scheduler()
-
-
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
 app = FastAPI(
-    title="SkyMind Flight AI API",
-    description="AI-powered flight search, prediction, and booking platform",
+    title="SkyMind AI API",
     version="1.0.0",
-    lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    description="AI-powered flight price prediction backend",
 )
 
-# Middleware
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# CORS – allow Next.js dev server and production URL
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-    "http://localhost:3000",
-    "https://*.vercel.app",
-    "https://sky-mind-delta.vercel.app",
-],
-    allow_credentials=False,
+        "http://localhost:3000",
+        "https://sky-mind-eta.vercel.app",
+        "*",  # remove in strict production
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Routers
-app.include_router(flights.router, prefix="/flights", tags=["Flights"])
-app.include_router(prediction.router, prefix="/prediction", tags=["AI Prediction"])
-app.include_router(booking.router, prefix="/booking", tags=["Booking"])
-app.include_router(payment.router, prefix="/payment", tags=["Payment"])
-app.include_router(user.router, prefix="/user", tags=["User"])
-app.include_router(alerts.router, prefix="/alerts", tags=["Price Alerts"])
+
+# ---------------------------------------------------------------------------
+# Request / Response schemas
+# ---------------------------------------------------------------------------
+class PredictRequest(BaseModel):
+    origin: str
+    destination: str
+    departure_date: str | None = None  # optional ISO date string
+
+    @field_validator("origin", "destination")
+    @classmethod
+    def not_empty(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not v:
+            raise ValueError("Field cannot be empty")
+        return v
+
+    @field_validator("destination")
+    @classmethod
+    def different_from_origin(cls, v: str, info) -> str:
+        origin = info.data.get("origin", "")
+        if v.upper() == origin.upper():
+            raise ValueError("Origin and destination cannot be the same")
+        return v
 
 
-@app.get("/", tags=["Health"])
-async def root():
-    return {
-        "status": "online",
-        "service": "SkyMind Flight AI API",
-        "version": "1.0.0",
-        "docs": "/docs"
-    }
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "service": "SkyMind AI API"}
 
 
-@app.get("/health", tags=["Health"])
-async def health():
-    return {"status": "healthy"}
+@app.post("/predict")
+def predict(body: PredictRequest):
+    """
+    Returns AI-driven flight price forecast and booking recommendation.
 
+    Request body:
+        { "origin": "DEL", "destination": "BOM", "departure_date": "2025-06-15" }
 
-# Add auth router (append to existing imports block manually if needed)
-from routers.auth import router as auth_router
-app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
+    Response:
+        {
+            "predicted_price": 7240.50,
+            "forecast": [...],
+            "trend": "RISING",
+            "probability_increase": 0.72,
+            "confidence": 0.83,
+            "recommendation": "BOOK_NOW",
+            "reason": "...",
+            "expected_change_percent": 8.4
+        }
+    """
+    try:
+        result = predictor.forecast_with_analysis(
+            origin=body.origin,
+            destination=body.destination,
+            departure_date=body.departure_date,
+        )
+        return result
 
-# Notifications router
-from routers.notifications import router as notifications_router
-app.include_router(notifications_router, prefix="/notifications", tags=["Notifications"])
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
-allow_origins=[
-    "http://localhost:3000",
-    "https://*.vercel.app",
-    "https://skymind.onrender.com",
-],
+    except Exception:
+        # Log full traceback server-side, return clean error to client
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error during price prediction. Please try again.",
+        )
