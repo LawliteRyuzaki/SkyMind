@@ -1,17 +1,21 @@
-// lib/api.ts  (FIXED)
+// lib/api.ts (FIXED)
 // =====================================================================
 // Fixes:
-//   1. Typed request/response interfaces match backend schema exactly
+//   1. Typed request/response interfaces match backend exactly
 //   2. Proper error propagation (throws ApiError with message)
-//   3. Base URL from env variable with fallback
-//   4. No hardcoded values — all data comes from the API
-//   5. Alert types added
+//   3. Alert API: setAlert, checkAlerts, deleteAlert
+//   4. formatDuration helper exported
+//   5. All flight search helpers retained
 // =====================================================================
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window === "undefined"
+    ? "http://localhost:8000"
+    : "");
 
 // ---------------------------------------------------------------------------
-// Types
+// Shared types
 // ---------------------------------------------------------------------------
 export interface ForecastPoint {
   day: number;
@@ -38,9 +42,10 @@ export interface PredictionResult {
 export interface PredictRequest {
   origin: string;
   destination: string;
-  departure_date?: string; // ISO date string, optional
+  departure_date?: string;
 }
 
+// Alert types
 export interface AlertRecord {
   id: string;
   origin: string;
@@ -70,34 +75,41 @@ export interface CheckAlertsResponse {
   triggered_count: number;
 }
 
+// Flight types
+export interface FlightSegment {
+  flight_number: string;
+  airline_code: string;
+  airline_name: string;
+  aircraft: string;
+  origin: string;
+  destination: string;
+  departure_time: string;
+  arrival_time: string;
+  duration: string;
+  cabin: string;
+  stops: number;
+}
+
+export interface FlightItinerary {
+  duration: string;
+  segments: FlightSegment[];
+}
+
+export interface FlightPrice {
+  total: number;
+  base: number;
+  currency: string;
+  fees: unknown[];
+  grand_total: number;
+}
+
 export interface FlightOffer {
   id: string;
   source: string;
-  price: {
-    total: number;
-    base: number;
-    currency: string;
-    fees?: any[];
-    grand_total: number;
-  };
-  itineraries: Array<{
-    duration: string;
-    segments: Array<{
-      flight_number: string;
-      airline_code: string;
-      airline_name: string;
-      aircraft: string;
-      origin: string;
-      destination: string;
-      departure_time: string;
-      arrival_time: string;
-      duration: string;
-      cabin: string;
-      stops: number;
-    }>;
-  }>;
+  price: FlightPrice;
+  itineraries: FlightItinerary[];
   validating_airlines: string[];
-  traveler_pricings: any[];
+  traveler_pricings: unknown[];
   last_ticketing_date?: string;
   seats_available?: number;
   ai_insight?: {
@@ -106,6 +118,42 @@ export interface FlightOffer {
     probability_increase: number;
     trend: string;
   };
+}
+
+export interface FlightSearchResponse {
+  flights: FlightOffer[];
+  count: number;
+  search_params: Record<string, unknown>;
+}
+
+export interface FlightSearchParams {
+  origin: string;
+  destination: string;
+  departure_date: string;
+  return_date?: string;
+  adults?: number;
+  cabin_class?: string;
+  currency?: string;
+}
+
+// Booking types
+export interface PassengerData {
+  type: string;
+  first_name: string;
+  last_name: string;
+  date_of_birth?: string;
+  passport_number?: string;
+  meal_preference?: string;
+  baggage_allowance?: number;
+}
+
+export interface CreateBookingRequest {
+  flight_offer_id: string;
+  flight_data: FlightOffer;
+  passengers: PassengerData[];
+  contact_email: string;
+  contact_phone: string;
+  cabin_class?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -124,10 +172,7 @@ export class ApiError extends Error {
 // ---------------------------------------------------------------------------
 // Core fetch helper
 // ---------------------------------------------------------------------------
-async function apiFetch<T>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
+async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...options,
@@ -139,7 +184,7 @@ async function apiFetch<T>(
       const errBody = await res.json();
       message = errBody?.detail ?? message;
     } catch {
-      // response body not JSON — keep default message
+      // non-JSON body
     }
     throw new ApiError(message, res.status);
   }
@@ -148,20 +193,19 @@ async function apiFetch<T>(
 }
 
 // ---------------------------------------------------------------------------
-// API methods
+// Prediction API
 // ---------------------------------------------------------------------------
-export async function predictPrice(
-  req: PredictRequest,
-): Promise<PredictionResult> {
+export async function predictPrice(req: PredictRequest): Promise<PredictionResult> {
   return apiFetch<PredictionResult>("/predict", {
     method: "POST",
     body: JSON.stringify(req),
   });
 }
 
-export async function setAlert(
-  req: SetAlertRequest,
-): Promise<{ success: boolean; alert_id: string; message: string }> {
+// ---------------------------------------------------------------------------
+// Alert API
+// ---------------------------------------------------------------------------
+export async function setAlert(req: SetAlertRequest): Promise<{ success: boolean; alert_id: string; message: string }> {
   return apiFetch("/set-alert", {
     method: "POST",
     body: JSON.stringify(req),
@@ -172,96 +216,52 @@ export async function checkAlerts(): Promise<CheckAlertsResponse> {
   return apiFetch<CheckAlertsResponse>("/check-alerts");
 }
 
-export async function deleteAlert(
-  alertId: string,
-): Promise<{ success: boolean; message: string }> {
+export async function deleteAlert(alertId: string): Promise<{ success: boolean; message: string }> {
   return apiFetch(`/alerts/${alertId}`, { method: "DELETE" });
-}
-
-export async function healthCheck(): Promise<{ status: string }> {
-  return apiFetch<{ status: string }>("/health");
 }
 
 // ---------------------------------------------------------------------------
 // Flight search
 // ---------------------------------------------------------------------------
-export interface FlightSearchParams {
-  origin: string;
-  destination: string;
-  departure_date: string;
-  return_date?: string;
-  adults?: number;
-  cabin_class?: string;
-  currency?: string;
-  max_results?: number;
-}
-
-export async function searchFlights(params: FlightSearchParams): Promise<{ flights: FlightOffer[]; count: number; search_params: any }> {
-  const query = new URLSearchParams();
-  query.set("origin", params.origin);
-  query.set("destination", params.destination);
-  query.set("departure_date", params.departure_date);
-  if (params.return_date) query.set("return_date", params.return_date);
-  if (params.adults) query.set("adults", String(params.adults));
-  if (params.cabin_class) query.set("cabin_class", params.cabin_class);
-  if (params.currency) query.set("currency", params.currency);
-  if (params.max_results) query.set("max_results", String(params.max_results));
-
-  return apiFetch(`/flights/search?${query.toString()}`);
+export async function searchFlights(params: FlightSearchParams): Promise<FlightSearchResponse> {
+  const qs = new URLSearchParams({
+    origin: params.origin,
+    destination: params.destination,
+    departure_date: params.departure_date,
+    adults: String(params.adults ?? 1),
+    cabin_class: params.cabin_class ?? "ECONOMY",
+    ...(params.return_date ? { return_date: params.return_date } : {}),
+  });
+  return apiFetch<FlightSearchResponse>(`/flights/search?${qs}`);
 }
 
 // ---------------------------------------------------------------------------
 // Booking
 // ---------------------------------------------------------------------------
-export interface CreateBookingParams {
-  flight_offer_id: string;
-  flight_data: FlightOffer;
-  passengers: Array<{
-    type: string;
-    first_name: string;
-    last_name: string;
-    date_of_birth?: string;
-    passport_number?: string;
-    meal_preference?: string;
-    baggage_allowance?: number;
-  }>;
-  contact_email: string;
-  contact_phone: string;
-  cabin_class?: string;
-  currency?: string;
-}
-
-export async function createBooking(params: CreateBookingParams): Promise<any> {
+export async function createBooking(req: CreateBookingRequest): Promise<unknown> {
   return apiFetch("/booking/create", {
     method: "POST",
-    body: JSON.stringify(params),
+    body: JSON.stringify(req),
   });
 }
 
-// ---------------------------------------------------------------------------
-// Payment
-// ---------------------------------------------------------------------------
-export interface CreateOrderParams {
+export async function createRazorpayOrder(params: {
   amount: number;
   booking_id: string;
   booking_reference: string;
-}
-
-export async function createRazorpayOrder(params: CreateOrderParams): Promise<any> {
+}): Promise<unknown> {
   return apiFetch("/payment/create-order", {
     method: "POST",
     body: JSON.stringify(params),
   });
 }
 
-export interface VerifyPaymentParams {
+export async function verifyPayment(params: {
   razorpay_order_id: string;
   razorpay_payment_id: string;
   razorpay_signature: string;
   booking_id: string;
-}
-
-export async function verifyPayment(params: VerifyPaymentParams): Promise<any> {
+}): Promise<unknown> {
   return apiFetch("/payment/verify", {
     method: "POST",
     body: JSON.stringify(params),
@@ -269,13 +269,20 @@ export async function verifyPayment(params: VerifyPaymentParams): Promise<any> {
 }
 
 // ---------------------------------------------------------------------------
+// Health
+// ---------------------------------------------------------------------------
+export async function healthCheck(): Promise<{ status: string }> {
+  return apiFetch<{ status: string }>("/health");
+}
+
+// ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 export function formatDuration(iso: string): string {
-  if (!iso) return "";
+  if (!iso) return "--";
   const match = iso.match(/PT(?:(\d+)H)?(?:(\d+)M)?/);
   if (!match) return iso;
-  const h = parseInt(match[1] || "0");
-  const m = parseInt(match[2] || "0");
-  return h > 0 ? `${h}h ${m > 0 ? m + "m" : ""}`.trim() : `${m}m`;
+  const h = match[1] ? `${match[1]}h` : "";
+  const m = match[2] ? `${match[2]}m` : "";
+  return [h, m].filter(Boolean).join(" ") || iso;
 }
