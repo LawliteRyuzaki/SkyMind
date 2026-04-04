@@ -3,20 +3,22 @@ Authentication router — signup, login, OTP, phone verify.
 Uses Supabase Auth + custom OTP via SMS/Email.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel, EmailStr
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
-from datetime import datetime, timedelta
-import uuid
+from datetime import datetime, timedelta, timezone
 
+from database import database as db
 from services.notifications import dispatcher, generate_otp, hash_otp, verify_otp
 
 router = APIRouter()
 
-
+# =========================================================
+# MODELS
+# =========================================================
 class SignUpRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=8)
     full_name: str
     phone: Optional[str] = None
 
@@ -47,109 +49,169 @@ class UpdateProfileRequest(BaseModel):
     meal_preference: Optional[str] = None
     preferred_seats: Optional[str] = None
 
-
-# In-memory OTP store (use Redis in production)
+# =========================================================
+# OTP STORE (In-Memory Dictionary)
+# =========================================================
 _otp_store: dict[str, dict] = {}
 
-
-@router.post("/signup")
+# =========================================================
+# SIGNUP
+# =========================================================
+@router.post("/signup", status_code=status.HTTP_201_CREATED)
 async def signup(req: SignUpRequest):
-    """
-    Register a new user.
-    In production: call Supabase Auth API.
-    Trigger sends welcome email automatically via DB trigger.
-    """
-    # Supabase signup (call their REST API)
-    # The DB trigger handle_new_user() auto-creates profile + sends welcome email
-    user_id = str(uuid.uuid4())  # In production: use Supabase returned ID
-
-    # Send welcome notification
     try:
-        dispatcher.send_welcome(req.email, req.full_name)
+        # 1. Supabase Auth Signup
+        response = db.supabase.auth.sign_up({
+            "email": req.email,
+            "password": req.password
+        })
+
+        if not response.user:
+            raise HTTPException(400, "Signup failed: No user returned")
+
+        user_id = response.user.id
+
+        # 2. Insert Profile Data
+        db.supabase.table("profiles").insert({
+            "id": user_id,
+            "email": req.email,
+            "full_name": req.full_name,
+            "phone": req.phone,
+            "phone_verified": False,
+            "notify_email": True,
+            "notify_sms": False,
+            "notify_whatsapp": False
+        }).execute()
+
+        # 3. Async Welcome Email (Non-blocking)
+        try:
+            dispatcher.send_welcome(req.email, req.full_name)
+        except Exception:
+            pass # Don't crash signup if email service flickers
+
+        return {
+            "success": True,
+            "message": "Account created successfully!",
+            "user_id": user_id,
+        }
+
     except Exception as e:
-        pass  # Non-critical
+        raise HTTPException(500, f"Signup error: {str(e)}")
 
-    return {
-        "success": True,
-        "message": "Account created! Check your email to verify.",
-        "user_id": user_id,
-    }
-
-
+# =========================================================
+# SEND OTP (Multi-Channel Fallback)
+# =========================================================
 @router.post("/send-otp")
 async def send_otp(req: OTPRequest):
-    """Send OTP for phone/email verification."""
+    if not req.email and not req.phone:
+        raise HTTPException(400, "Must provide email or phone for OTP delivery")
+
     otp = generate_otp(6)
     otp_hash = hash_otp(otp)
-    expires_at = datetime.now() + timedelta(minutes=10)
+    # Use timezone-aware datetime for 2026 consistency
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
 
-    # Store OTP
-    _otp_store[f"{req.user_id}:{req.purpose}"] = {
+    key = f"{req.user_id}:{req.purpose}"
+    _otp_store[key] = {
         "hash": otp_hash,
         "expires_at": expires_at,
         "attempts": 0,
     }
 
-    # Send via chosen channel
-    sent = dispatcher.send_otp(
-        email=req.email,
-        phone=req.phone,
-    )
+    sent = False
+
+    # 1. Try Email
+    if req.email:
+        try:
+            sent = dispatcher.email.send_otp(req.email, otp, req.purpose)
+        except Exception:
+            sent = False
+
+    # 2. SMS Fallback
+    if not sent and req.phone:
+        try:
+            sent = dispatcher.sms.send_otp(req.phone, otp)
+        except Exception:
+            sent = False
+
+    # 3. WhatsApp Fallback
+    if not sent and req.phone and hasattr(dispatcher, "whatsapp"):
+        try:
+            sent = dispatcher.whatsapp.send_otp(req.phone, otp)
+        except Exception:
+            sent = False
+
+    if not sent:
+        _otp_store.pop(key, None)
+        raise HTTPException(500, "Failed to deliver OTP via any channel")
 
     return {
         "success": True,
         "message": f"OTP sent to {'email' if req.email else 'phone'}",
-        "expires_in": 600,  # 10 minutes
+        "expires_in": 600,
     }
 
-
+# =========================================================
+# VERIFY OTP
+# =========================================================
 @router.post("/verify-otp")
 async def verify_otp_endpoint(req: VerifyOTPRequest):
-    """Verify OTP and mark phone/email as verified."""
     key = f"{req.user_id}:{req.purpose}"
     stored = _otp_store.get(key)
 
     if not stored:
-        raise HTTPException(400, "OTP not found or expired. Request a new one.")
+        raise HTTPException(404, "No active OTP found. Please request a new one.")
 
-    if datetime.now() > stored["expires_at"]:
+    # Expiry Check
+    if datetime.now(timezone.utc) > stored["expires_at"]:
         _otp_store.pop(key, None)
-        raise HTTPException(400, "OTP has expired. Please request a new one.")
+        raise HTTPException(400, "OTP has expired")
 
+    # Brute Force Protection
     stored["attempts"] += 1
     if stored["attempts"] > 5:
         _otp_store.pop(key, None)
-        raise HTTPException(429, "Too many attempts. Request a new OTP.")
+        raise HTTPException(429, "Too many failed attempts. OTP invalidated.")
 
+    # Validation
     if not verify_otp(req.otp, stored["hash"]):
-        raise HTTPException(400, f"Invalid OTP. {5 - stored['attempts']} attempts remaining.")
+        raise HTTPException(401, "Invalid OTP")
 
-    # Mark verified
+    # Success Logic
     _otp_store.pop(key, None)
-    # In production: UPDATE profiles SET phone_verified=TRUE WHERE id=req.user_id
 
-    return {"success": True, "message": "Verified successfully!"}
+    try:
+        db.supabase.table("profiles").update({
+            "phone_verified": True
+        }).eq("id", req.user_id).execute()
+    except Exception as e:
+        raise HTTPException(500, f"Verified, but failed to update profile: {e}")
 
+    return {"success": True, "message": "Verification successful"}
+
+# =========================================================
+# PROFILE MANAGEMENT
+# =========================================================
+@router.get("/profile/{user_id}")
+async def get_profile(user_id: str):
+    try:
+        res = db.supabase.table("profiles").select("*").eq("id", user_id).execute()
+        if not res.data:
+            raise HTTPException(404, "Profile not found")
+        return res.data[0]
+    except Exception as e:
+        raise HTTPException(500, f"Database fetch error: {e}")
 
 @router.put("/profile/{user_id}")
 async def update_profile(user_id: str, req: UpdateProfileRequest):
-    """Update user profile and notification preferences."""
-    updates = {k: v for k, v in req.model_dump().items() if v is not None}
-    # In production: supabase.table("profiles").update(updates).eq("id", user_id).execute()
-    return {"success": True, "updated": updates}
+    # Filter out None values to avoid overwriting existing data with nulls
+    updates = req.model_dump(exclude_unset=True)
 
+    if not updates:
+        raise HTTPException(400, "No valid update fields provided")
 
-@router.get("/profile/{user_id}")
-async def get_profile(user_id: str):
-    """Get user profile with notification settings."""
-    # In production: query Supabase profiles table
-    return {
-        "id": user_id,
-        "full_name": "Demo User",
-        "email": "user@example.com",
-        "notify_email": True,
-        "notify_sms": True,
-        "notify_whatsapp": False,
-        "skymind_points": 0,
-        "tier": "BLUE",
-    }
+    try:
+        res = db.supabase.table("profiles").update(updates).eq("id", user_id).execute()
+        return {"success": True, "updated_fields": list(updates.keys())}
+    except Exception as e:
+        raise HTTPException(500, f"Update failed: {e}")

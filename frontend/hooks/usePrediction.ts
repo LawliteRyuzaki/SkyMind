@@ -1,20 +1,14 @@
-// hooks/usePrediction.ts  (FIXED)
+// hooks/usePrediction.ts (FIXED)
 // =====================================================================
 // Fixes:
 //   1. Debounce (300ms) to prevent duplicate API calls
 //   2. Loading + error state management
-//   3. Simple in-memory cache (keyed by origin+destination)
-//   4. Returns typed PredictionResult – no hardcoded fallbacks
-//   5. Stale response guard via activeReqRef
+//   3. In-memory cache keyed by origin+destination
+//   4. Returns typed PredictionResult — no hardcoded fallbacks
 // =====================================================================
 
 import { useState, useCallback, useRef } from "react";
-import {
-  predictPrice,
-  PredictionResult,
-  PredictRequest,
-  ApiError,
-} from "@/lib/api";
+import { predictPrice, PredictionResult, PredictRequest, ApiError } from "@/lib/api";
 
 const cache = new Map<string, PredictionResult>();
 
@@ -37,19 +31,19 @@ export function usePrediction(): UsePredictionReturn {
   const predict = useCallback((req: PredictRequest) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
 
-    // Client-side validation
-    if (!req.origin.trim() || !req.destination.trim()) {
+    const org = req.origin.trim().toUpperCase();
+    const dst = req.destination.trim().toUpperCase();
+
+    if (!org || !dst) {
       setError("Please enter both origin and destination.");
       return;
     }
-    if (req.origin.trim().toUpperCase() === req.destination.trim().toUpperCase()) {
+    if (org === dst) {
       setError("Origin and destination cannot be the same.");
       return;
     }
 
-    const cacheKey = `${req.origin.toUpperCase()}-${req.destination.toUpperCase()}`;
-
-    // Return cached result immediately
+    const cacheKey = `${org}-${dst}`;
     if (cache.has(cacheKey)) {
       setResult(cache.get(cacheKey)!);
       setError(null);
@@ -65,20 +59,13 @@ export function usePrediction(): UsePredictionReturn {
       setResult(null);
 
       try {
-        const data = await predictPrice(req);
-
+        const data = await predictPrice({ ...req, origin: org, destination: dst });
         if (activeReqRef.current !== reqId) return;
-
         cache.set(cacheKey, data);
         setResult(data);
       } catch (err) {
         if (activeReqRef.current !== reqId) return;
-
-        if (err instanceof ApiError) {
-          setError(err.message);
-        } else {
-          setError("Could not connect to backend. Make sure the API server is running.");
-        }
+        setError(err instanceof ApiError ? err.message : "An unexpected error occurred. Please try again.");
       } finally {
         if (activeReqRef.current === reqId) setLoading(false);
       }

@@ -1,178 +1,206 @@
-"""
-Amadeus Flight API Integration Service.
-Handles OAuth token management and flight search.
-"""
-
+import os
 import httpx
-import logging
-from datetime import datetime, timedelta
-from typing import Optional
-from config import settings
+from typing import List
+from datetime import datetime, timezone
 
-logger = logging.getLogger(__name__)
+from dotenv import load_dotenv
+load_dotenv()
 
-AMADEUS_BASE = "https://test.api.amadeus.com"  # Use prod URL for production
+from ml.price_model import get_predictor
+from database.database import database as db
 
+AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY")
+AMADEUS_API_SECRET = os.getenv("AMADEUS_API_SECRET")
+BASE_URL = "https://test.api.amadeus.com" # Switch to 'production' for live 2026 data
 
-class AmadeusService:
-    def __init__(self):
-        self._token: Optional[str] = None
-        self._token_expires: Optional[datetime] = None
-
-    async def _get_token(self) -> str:
-        """Get or refresh OAuth2 token."""
-        if self._token and self._token_expires and datetime.now() < self._token_expires:
-            return self._token
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{AMADEUS_BASE}/v1/security/oauth2/token",
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": settings.amadeus_client_id,
-                    "client_secret": settings.amadeus_client_secret,
-                },
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            self._token = data["access_token"]
-            self._token_expires = datetime.now() + timedelta(seconds=data["expires_in"] - 60)
-            return self._token
-
-    async def search_flights(
-        self,
-        origin: str,
-        destination: str,
-        departure_date: str,
-        return_date: Optional[str] = None,
-        adults: int = 1,
-        cabin_class: str = "ECONOMY",
-        currency: str = "INR",
-        max_results: int = 20,
-    ) -> dict:
-        """Search flights using Amadeus Flight Offers Search API."""
-        token = await self._get_token()
-
-        params = {
-            "originLocationCode": origin.upper(),
-            "destinationLocationCode": destination.upper(),
-            "departureDate": departure_date,
-            "adults": adults,
-            "travelClass": cabin_class,
-            "currencyCode": currency,
-            "max": max_results,
-            "nonStop": "false",
-        }
-        if return_date:
-            params["returnDate"] = return_date
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{AMADEUS_BASE}/v2/shopping/flight-offers",
-                params=params,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            if resp.status_code == 400:
-                logger.warning(f"Amadeus 400: {resp.text}")
-                return {"data": [], "meta": {}, "dictionaries": {}}
-            resp.raise_for_status()
-            return resp.json()
-
-    async def get_cheapest_dates(self, origin: str, destination: str) -> dict:
-        """Get cheapest dates for a route (Flight Inspiration Search)."""
-        token = await self._get_token()
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{AMADEUS_BASE}/v1/shopping/flight-dates",
-                params={
-                    "origin": origin.upper(),
-                    "destination": destination.upper(),
-                },
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            if resp.status_code != 200:
-                return {"data": []}
-            return resp.json()
-
-    async def get_flight_inspiration(self, origin: str, currency: str = "INR") -> dict:
-        """Get cheapest destinations from an origin."""
-        token = await self._get_token()
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{AMADEUS_BASE}/v1/shopping/flight-destinations",
-                params={
-                    "origin": origin.upper(),
-                    "currencyCode": currency,
-                    "maxPrice": 50000,
-                },
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            if resp.status_code != 200:
-                return {"data": []}
-            return resp.json()
-
-
-def parse_flight_offers(raw: dict) -> list[dict]:
-    """
-    Parse Amadeus flight offer response into clean dicts.
-    """
-    offers = []
-    data = raw.get("data", [])
-    dictionaries = raw.get("dictionaries", {})
-    carriers = dictionaries.get("carriers", {})
-    aircraft_dict = dictionaries.get("aircraft", {})
-
-    for offer in data:
-        itineraries = offer.get("itineraries", [])
-        price_info = offer.get("price", {})
-
-        parsed_itineraries = []
-        for itin in itineraries:
-            segments = []
-            for seg in itin.get("segments", []):
-                dep = seg["departure"]
-                arr = seg["arrival"]
-                carrier_code = seg.get("carrierCode", "")
-                segments.append({
-                    "flight_number": f"{carrier_code}{seg.get('number', '')}",
-                    "airline_code": carrier_code,
-                    "airline_name": carriers.get(carrier_code, carrier_code),
-                    "aircraft": aircraft_dict.get(
-                        seg.get("aircraft", {}).get("code", ""), "Unknown"
-                    ),
-                    "origin": dep.get("iataCode"),
-                    "destination": arr.get("iataCode"),
-                    "departure_time": dep.get("at"),
-                    "arrival_time": arr.get("at"),
-                    "duration": seg.get("duration", ""),
-                    "cabin": seg.get("cabin", "ECONOMY"),
-                    "stops": seg.get("numberOfStops", 0),
-                })
-            parsed_itineraries.append({
-                "duration": itin.get("duration", ""),
-                "segments": segments,
-            })
-
-        offers.append({
-            "id": offer.get("id"),
-            "source": offer.get("source", "GDS"),
-            "price": {
-                "total": float(price_info.get("total", 0)),
-                "base": float(price_info.get("base", 0)),
-                "currency": price_info.get("currency", "INR"),
-                "fees": price_info.get("fees", []),
-                "grand_total": float(price_info.get("grandTotal", price_info.get("total", 0))),
+# ==========================================
+# 🔐 AUTH: TOKEN MANAGEMENT
+# ==========================================
+async def get_access_token():
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{BASE_URL}/v1/security/oauth2/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": AMADEUS_API_KEY,
+                "client_secret": AMADEUS_API_SECRET,
             },
-            "itineraries": parsed_itineraries,
-            "validating_airlines": offer.get("validatingAirlineCodes", []),
-            "traveler_pricings": offer.get("travelerPricings", []),
-            "last_ticketing_date": offer.get("lastTicketingDate"),
-            "seats_available": offer.get("numberOfBookableSeats", None),
-        })
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        resp.raise_for_status()
+        return resp.json()["access_token"]
 
-    return offers
+# ==========================================
+# 💾 DB: SYSTEMATIC PRICE LOGGING
+# ==========================================
+def save_price(origin, destination, price, airline, flight_number, departure_date):
+    """Logs data to Supabase to continuously retrain the XGBoost model."""
+    try:
+        dep_dt = datetime.strptime(departure_date, "%Y-%m-%d")
+        now = datetime.now(timezone.utc)
+        
+        db.supabase.table("price_history").insert({
+            "origin_code": origin,
+            "destination_code": destination,
+            "airline_code": airline,
+            "flight_number": flight_number,
+            "price": float(price),
+            "currency": "INR",
+            "departure_date": departure_date,
+            "recorded_at": now.isoformat(),
+            "is_live": True, 
+            "days_until_dep": max((dep_dt.date() - now.date()).days, 0),
+            "day_of_week": dep_dt.weekday(),
+            "month": dep_dt.month,
+            "week_of_year": dep_dt.isocalendar()[1],
+            "is_weekend": dep_dt.weekday() >= 5
+        }).execute()
+    except Exception as e:
+        print(f"⚠️ Telemetry Error: {e}")
 
+# ==========================================
+# 📊 TRENDS: HISTORICAL LOOKBACK
+# ==========================================
+def get_recent_prices(origin, destination):
+    """Fetches last 5 data points to calculate momentum."""
+    try:
+        res = db.supabase.table("price_history") \
+            .select("price") \
+            .eq("origin_code", origin) \
+            .eq("destination_code", destination) \
+            .order("recorded_at", desc=True) \
+            .limit(5) \
+            .execute()
+        return [r["price"] for r in res.data or []]
+    except:
+        return []
 
-# Singleton instance
-amadeus_service = AmadeusService()
+# ==========================================
+# ✈️ PARSE: API RESPONSE CLEANING
+# ==========================================
+def parse_flight_offers(data: dict) -> List[dict]:
+    flights = []
+    # 2026 Exchange Rate Logic (Approx EUR to INR)
+    EUR_TO_INR = 92.5 
+    
+    for offer in data.get("data", []):
+        try:
+            itinerary = offer["itineraries"][0]
+            seg = itinerary["segments"][0]
+            
+            # Extract clean price
+            raw_price = float(offer["price"]["grandTotal"])
+            price_in_inr = round(raw_price * EUR_TO_INR, 2)
+
+            flights.append({
+                "origin": seg["departure"]["iataCode"],
+                "destination": seg["arrival"]["iataCode"],
+                "airline": seg["carrierCode"],
+                "flight_number": f"{seg['carrierCode']}-{seg['number']}",
+                "price": price_in_inr,
+                "raw_data": offer # Keep for booking flow
+            })
+        except (KeyError, IndexError, ValueError):
+            continue
+    return flights
+
+# ==========================================
+# 🧠 BRAIN: ML PREDICTION & DECISION
+# ==========================================
+def enrich_flights_with_ml(flights: List[dict], departure_date: str) -> List[dict]:
+    predictor = get_predictor()
+    enriched = []
+    dep_date_obj = datetime.strptime(departure_date, "%Y-%m-%d").date()
+    now = datetime.now()
+
+    for f in flights:
+        try:
+            origin, destination = f["origin"], f["destination"]
+            airline, price = f["airline"], f["price"]
+
+            # 1. Log search to training set
+            save_price(origin, destination, price, airline, f["flight_number"], departure_date)
+
+            # 2. Momentum Analysis
+            recent = get_recent_prices(origin, destination)
+            p1d = (price - recent[0]) if len(recent) >= 1 else 0
+            p3d = (price - recent[2]) if len(recent) >= 3 else 0
+
+            # 3. Predict Future Price
+            input_features = {
+                "origin_code": origin,
+                "destination_code": destination,
+                "airline_code": airline,
+                "days_until_dep": max((dep_date_obj - now.date()).days, 0),
+                "day_of_week": dep_date_obj.weekday(),
+                "month": dep_date_obj.month,
+                "week_of_year": dep_date_obj.isocalendar()[1],
+                "hour_of_day": now.hour,
+                "price_change_1d": p1d,
+                "price_change_3d": p3d,
+                "is_peak_hour": 1 if now.hour in [8, 9, 18, 19] else 0
+            }
+
+            predicted_val = predictor.predict(input_features)
+            
+            # Guardrails: Model can't predict more than 50% deviation
+            predicted_val = max(price * 0.5, min(predicted_val, price * 1.5))
+            
+            price_diff = predicted_val - price
+
+            # 4. Actionable Intelligence
+            if price_diff < -500:
+                decision = "BUY NOW 🔥"
+                urgency = "High: Prices expected to rise soon"
+            elif price_diff > 500:
+                decision = "WAIT ⏳"
+                urgency = "Moderate: Model predicts a price drop"
+            else:
+                decision = "FAIR"
+                urgency = "Stable: Current price is within normal range"
+
+            f.update({
+                "predicted_price": round(predicted_val, 2),
+                "trend_direction": "rising" if price_diff > 0 else "dropping",
+                "prediction_confidence": "High" if len(recent) > 10 else "Medium",
+                "decision": decision,
+                "advice": urgency
+            })
+        except Exception as e:
+            print(f"🧠 Enrichment Skip: {e}")
+        
+        enriched.append(f)
+    return enriched
+
+# ==========================================
+# 🔍 SEARCH: MAIN ENTRY POINT
+# ==========================================
+async def search_flights(origin: str, destination: str, date: str):
+    """Public method to fetch and predict flight prices."""
+    try:
+        token = await get_access_token()
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{BASE_URL}/v2/shopping/flight-offers",
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "originLocationCode": origin.upper(),
+                    "destinationLocationCode": destination.upper(),
+                    "departureDate": date,
+                    "adults": 1,
+                    "max": 10 
+                }
+            )
+            
+            if resp.status_code != 200:
+                return []
+
+            flights = parse_flight_offers(resp.json())
+            
+            # Wrap in enrichment (Prediction logic)
+            return enrich_flights_with_ml(flights, date)
+            
+    except Exception as e:
+        print(f"🚀 Flight Search Error: {e}")
+        return []

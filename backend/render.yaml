@@ -3,14 +3,17 @@ services:
     name: skymind-backend
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Optimized build for ML libraries
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    # Added lifespan for APScheduler stability
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --lifespan on
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
-      - key: AMADEUS_CLIENT_ID
+      # API Keys (Ensure these are set in your dashboard)
+      - key: AMADEUS_API_KEY
         sync: false
-      - key: AMADEUS_CLIENT_SECRET
+      - key: AMADEUS_API_SECRET
         sync: false
       - key: SUPABASE_URL
         sync: false
@@ -20,5 +23,13 @@ services:
         sync: false
       - key: RAZORPAY_KEY_SECRET
         sync: false
+      # 📧 Added for Notifications Service
+      - key: GMAIL_USER
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: FAST2SMS_API_KEY
+        sync: false
     plan: free
+    # Critical for monitoring the Scheduler health
     healthCheckPath: /health

@@ -1,288 +1,206 @@
-"""
-╔══════════════════════════════════════════════════════════════╗
-║  SkyMind — Production Background Scheduler                   ║
-║  Jobs: price alerts · check-in reminders · flight status     ║
-║        ML retraining · promo campaigns · notification flush  ║
-╚══════════════════════════════════════════════════════════════╝
-"""
-
 import logging
 import os
-from datetime import datetime, timedelta
+import time
+import asyncio
+from datetime import datetime, timedelta, timezone
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
+from database.database import database as db
+from ml.price_model import get_predictor
+
 logger = logging.getLogger(__name__)
+
+# Global Scheduler Instance
 _scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
 
+# 📅 Systematic Date Buckets for 2026 Market Coverage
+DATE_BUCKETS = [1, 2, 3, 5, 7, 10, 14, 21, 28, 30]
 
-# ================================================================
-# JOB 1 — Check Price Alerts (every 30 min)
-# ================================================================
+# ✈️ Tier-1 Indian Route Batches
+ROUTE_BATCHES = [
+    [("DEL", "BOM"), ("BOM", "DEL"), ("DEL", "BLR")],
+    [("BLR", "DEL"), ("DEL", "CCU"), ("CCU", "DEL")],
+    [("BBI", "DEL"), ("DEL", "BBI"), ("BBI", "BLR")],
+    [("BLR", "BBI"), ("BOM", "BLR"), ("BLR", "BOM")],
+    [("COK", "DEL"), ("DEL", "COK"), ("HYD", "DEL")],
+]
 
-def check_price_alerts():
-    """
-    Queries all active price alerts from Supabase.
-    Fetches current price via Amadeus API.
-    Fires notification if current_price <= target_price.
-    """
-    from services.notifications import dispatcher
-    logger.info("⏰ [Scheduler] Checking price alerts...")
+_price_cache = {}
+
+def get_cached_price(key):
+    if key in _price_cache:
+        price, ts = _price_cache[key]
+        if time.time() - ts < 3600:
+            return price
+    return None
+
+def set_cached_price(key, value):
+    _price_cache[key] = (value, time.time())
+
+# ==========================================
+# 🚀 FETCH + STORE (SYNC-TO-ASYNC BRIDGE)
+# ==========================================
+def fetch_and_store_flights(origin, destination, date_str):
+    from services.amadeus import amadeus_service
 
     try:
-        # In production: replace with real Supabase query
-        # supabase = get_supabase_client()
-        # alerts = supabase.from_("v_active_alerts").select("*").execute().data
-        alerts = []  # placeholder
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-        fired = 0
-        for alert in alerts:
+        res = loop.run_until_complete(amadeus_service.search_flights(
+            origin=origin, 
+            destination=destination, 
+            departure_date=date_str,
+            max_results=5
+        ))
+
+        data = res.get("data", []) if isinstance(res, dict) else []
+        if not data:
+            return None
+
+        prices = []
+        now = datetime.now(timezone.utc)
+        dep_dt = datetime.strptime(date_str, "%Y-%m-%d")
+
+        for f in data:
             try:
-                # Fetch current price (Amadeus or cached routes table)
-                current_price = _get_current_price(
-                    alert["origin_code"],
-                    alert["destination_code"],
-                    alert["departure_date"],
-                    alert.get("cabin_class", "ECONOMY")
-                )
-                if current_price is None:
-                    continue
+                price_info = f.get("price", {})
+                price = float(price_info.get("total", 0))
+                
+                if price < 1500: continue 
+                prices.append(price)
 
-                if float(current_price) <= float(alert["target_price"]):
-                    dispatcher.send_price_alert(alert, current_price)
-                    # Mark alert as triggered in DB
-                    # supabase.table("price_alerts").update({...}).eq("id", alert["id"]).execute()
-                    fired += 1
-                    logger.info("🔔 Alert fired: %s→%s at %.0f (target %.0f)",
-                                alert["origin_code"], alert["destination_code"],
-                                current_price, float(alert["target_price"]))
-
-                # Update last_checked + last_price
-                # supabase.table("price_alerts").update({
-                #   "last_checked": datetime.utcnow().isoformat(),
-                #   "last_price": current_price
-                # }).eq("id", alert["id"]).execute()
+                db.supabase.table("price_history").insert({
+                    "origin_code": origin,
+                    "destination_code": destination,
+                    "airline_code": f.get("validatingAirlineCodes", ["AI"])[0],
+                    "price": price,
+                    "currency": "INR",
+                    "departure_date": date_str,
+                    "days_until_dep": max((dep_dt.date() - now.date()).days, 0),
+                    "is_live": True,
+                    "recorded_at": now.isoformat(),
+                    "market_era": "2026_PROD"
+                }).execute()
 
             except Exception as e:
-                logger.error("Alert check failed for %s: %s", alert.get("id"), e)
+                logger.warning(f"Row skip during scrape: {e}")
 
-        logger.info("✅ Price alerts checked — %d fired", fired)
+        return min(prices) if prices else None
 
     except Exception as e:
-        logger.error("check_price_alerts error: %s", e)
-
-
-def _get_current_price(origin: str, destination: str, date: str, cabin: str) -> float | None:
-    """Fetch live price. Falls back to routes table average."""
-    try:
-        # Option A: Amadeus live search
-        # from services.amadeus import AmadeusService
-        # offers = AmadeusService().search_flights(origin, destination, date, 1)
-        # return min(o['price']['total'] for o in offers) if offers else None
-
-        # Option B: routes table average (fast, no API cost)
-        # supabase = get_supabase_client()
-        # r = supabase.table("routes").select("avg_price_inr") \
-        #     .eq("origin_code", origin).eq("destination_code", destination) \
-        #     .single().execute()
-        # return float(r.data["avg_price_inr"]) if r.data else None
-
-        return None  # replace with real implementation
-    except Exception:
+        logger.error(f"Scraper failed for {origin}->{destination}: {e}")
         return None
 
+# ==========================================
+# 🧠 HYBRID FETCH (Cache -> Live -> ML)
+# ==========================================
+def get_price(origin, destination, date_str):
+    key = f"{origin}-{destination}-{date_str}"
+    
+    cached = get_cached_price(key)
+    if cached: return cached
 
-# ================================================================
-# JOB 2 — Send Check-in Reminders (every hour)
-# ================================================================
-
-def send_checkin_reminders():
-    """
-    Finds confirmed bookings departing in 24–48 hours
-    where checkin_notif_sent = FALSE. Sends reminder.
-    """
-    from services.notifications import dispatcher
-    logger.info("⏰ [Scheduler] Sending check-in reminders...")
-
-    try:
-        now = datetime.utcnow()
-        window_start = now + timedelta(hours=24)
-        window_end   = now + timedelta(hours=48)
-
-        # In production:
-        # bookings = supabase.from_("v_booking_details") \
-        #   .select("*") \
-        #   .eq("status", "CONFIRMED") \
-        #   .eq("checkin_notif_sent", False) \
-        #   .gte("departure_time", window_start.isoformat()) \
-        #   .lte("departure_time", window_end.isoformat()) \
-        #   .execute().data
-        bookings = []
-
-        for booking in bookings:
-            try:
-                profile = {
-                    "notify_email":    booking.get("notify_email", True),
-                    "notify_sms":      booking.get("notify_sms", True),
-                    "notify_whatsapp": False,
-                    "full_name":       booking.get("user_name"),
-                }
-                dispatcher.send_checkin_reminder(booking, profile)
-                # supabase.table("bookings").update({"checkin_notif_sent": True}) \
-                #   .eq("id", booking["id"]).execute()
-                logger.info("✅ Check-in reminder sent: %s", booking.get("booking_reference"))
-            except Exception as e:
-                logger.error("Reminder failed for booking %s: %s", booking.get("id"), e)
-
-    except Exception as e:
-        logger.error("send_checkin_reminders error: %s", e)
-
-
-# ================================================================
-# JOB 3 — Flush Pending Notifications (every 5 min)
-# ================================================================
-
-def flush_pending_notifications():
-    """
-    Processes the notifications queue (notifications table).
-    Retries failed ones up to 3 times.
-    """
-    from services.notifications import dispatcher
-    logger.info("⏰ [Scheduler] Flushing pending notifications...")
+    price = fetch_and_store_flights(origin, destination, date_str)
+    if price:
+        set_cached_price(key, price)
+        return price
 
     try:
-        # In production:
-        # pending = supabase.from_("v_pending_notifications").select("*").execute().data
-        pending = []
-
-        for notif in pending:
-            try:
-                sent = False
-                channel = notif.get("channel")
-                recipient = notif.get("recipient")
-                message = notif.get("message","")
-                subject = notif.get("subject","")
-
-                if channel == "EMAIL":
-                    sent = dispatcher.email.send(recipient, subject,
-                                                 f"<p>{message}</p>", message)
-                elif channel == "SMS":
-                    sent = dispatcher.sms.send(recipient, message)
-                elif channel == "WHATSAPP":
-                    sent = dispatcher.whatsapp.send(recipient, message)
-
-                status = "SENT" if sent else "FAILED"
-                # supabase.table("notifications").update({
-                #   "status": status,
-                #   "sent_at": datetime.utcnow().isoformat() if sent else None,
-                #   "retry_count": notif.get("retry_count",0) + (0 if sent else 1)
-                # }).eq("id", notif["id"]).execute()
-
-            except Exception as e:
-                logger.error("Notification flush error for %s: %s", notif.get("id"), e)
-
+        predictor = get_predictor()
+        now = datetime.now(timezone.utc)
+        dep_dt = datetime.strptime(date_str, "%Y-%m-%d")
+        
+        input_data = {
+            "origin_code": origin,
+            "destination_code": destination,
+            "airline_code": "AI",
+            "days_until_dep": max((dep_dt.date() - now.date()).days, 0),
+            "day_of_week": dep_dt.weekday(),
+            "month": dep_dt.month,
+            "week_of_year": dep_dt.isocalendar()[1],
+            "is_live": True
+        }
+        pred = float(predictor.predict(input_data))
+        set_cached_price(key, pred)
+        return pred
     except Exception as e:
-        logger.error("flush_pending_notifications error: %s", e)
+        logger.error(f"ML Fallback failed: {e}")
+        return None
 
+# ==========================================
+# 📅 SCHEDULED TASKS
+# ==========================================
+def collect_batch(batch_index):
+    logger.info(f"📋 Running Scraping Batch {batch_index}...")
+    try:
+        routes = ROUTE_BATCHES[batch_index]
+        today = datetime.now().date()
+        for origin, destination in routes:
+            for d in DATE_BUCKETS:
+                target_date = (today + timedelta(days=d)).strftime("%Y-%m-%d")
+                get_price(origin, destination, target_date)
+                time.sleep(2) # Protect API Rate Limits
+    except Exception as e:
+        logger.error(f"Batch {batch_index} failed: {e}")
 
-# ================================================================
-# JOB 4 — Retrain ML Models (daily at 2am IST)
-# ================================================================
+def check_price_alerts():
+    from services.notifications import dispatcher
+    logger.info("⏰ Scanning active Price Alerts...")
+    try:
+        alerts = db.get_active_alerts()
+        for alert in alerts:
+            current_price = get_price(
+                alert["origin_code"], 
+                alert["destination_code"], 
+                alert["departure_date"]
+            )
+            if current_price and current_price <= alert["target_price"]:
+                dispatcher.send_price_alert(alert, current_price)
+    except Exception as e:
+        logger.error(f"Alert check failed: {e}")
 
 def retrain_models():
-    """Pulls latest price_history and retrains FlightPricePredictor."""
-    logger.info("🤖 [Scheduler] Retraining price prediction models...")
+    logger.info("🤖 Maintenance: Retraining XGBoost Predictor...")
     try:
-        from ml.price_model import FlightPricePredictor
-        import pandas as pd
-
-        # In production: pull from Supabase
-        # supabase = get_supabase_client()
-        # rows = supabase.table("price_history").select("*") \
-        #   .order("recorded_at", desc=True).limit(50000).execute().data
-        # df = pd.DataFrame(rows)
-        # predictor = FlightPricePredictor()
-        # predictor.train(df)
-        # predictor.save("ml/models/price_model.pkl")
-        logger.info("✅ Models retrained successfully")
+        predictor = get_predictor()
+        predictor.train() 
+        predictor.load()  
+        logger.info("✅ Retraining complete. New 2026 patterns active.")
     except Exception as e:
-        logger.error("retrain_models error: %s", e)
+        logger.error(f"Maintenance retraining failed: {e}")
 
-
-# ================================================================
-# JOB 5 — Update Route Prices Cache (every 6 hours)
-# ================================================================
-
-def update_route_prices():
-    """Refreshes avg/min/max prices in the routes table from price_history."""
-    logger.info("📊 [Scheduler] Updating route price cache...")
-    try:
-        # In production:
-        # supabase = get_supabase_client()
-        # supabase.rpc("refresh_route_prices").execute()
-        logger.info("✅ Route prices updated")
-    except Exception as e:
-        logger.error("update_route_prices error: %s", e)
-
-
-# ================================================================
-# JOB 6 — Expire Stale Alerts (daily)
-# ================================================================
-
-def expire_old_alerts():
-    """Deactivates price alerts past their travel date."""
-    logger.info("🧹 [Scheduler] Expiring stale price alerts...")
-    try:
-        # supabase.table("price_alerts") \
-        #   .update({"is_active": False}) \
-        #   .lt("departure_date", datetime.utcnow().date().isoformat()) \
-        #   .execute()
-        logger.info("✅ Stale alerts expired")
-    except Exception as e:
-        logger.error("expire_old_alerts error: %s", e)
-
-
-# ================================================================
-# SCHEDULER SETUP
-# ================================================================
-
+# ==========================================
+# 🚦 STARTUP LOGIC (FIXED)
+# ==========================================
 def start_scheduler():
-    jobs = [
-        # Every 30 min — price alerts
-        (_scheduler.add_job, check_price_alerts,
-         IntervalTrigger(minutes=30), "check_price_alerts"),
-        # Every hour — check-in reminders
-        (_scheduler.add_job, send_checkin_reminders,
-         IntervalTrigger(hours=1), "checkin_reminders"),
-        # Every 5 min — notification queue flush
-        (_scheduler.add_job, flush_pending_notifications,
-         IntervalTrigger(minutes=5), "flush_notifications"),
-        # Daily 2am IST — ML retraining
-        (_scheduler.add_job, retrain_models,
-         CronTrigger(hour=2, minute=0, timezone="Asia/Kolkata"), "retrain_models"),
-        # Every 6 hours — route price cache
-        (_scheduler.add_job, update_route_prices,
-         IntervalTrigger(hours=6), "update_route_prices"),
-        # Daily midnight — expire old alerts
-        (_scheduler.add_job, expire_old_alerts,
-         CronTrigger(hour=0, minute=0, timezone="Asia/Kolkata"), "expire_alerts"),
-    ]
+    if _scheduler.running:
+        return
 
-    for fn, job_fn, trigger, job_id in jobs:
-        fn(job_fn, trigger=trigger, id=job_id, replace_existing=True,
-           misfire_grace_time=300)
+    # Staggered Batch Collection (Calculates rollover minutes safely)
+    base_hour = 1
+    for i in range(len(ROUTE_BATCHES)):
+        total_minutes = i * 20
+        run_hour = base_hour + (total_minutes // 60)
+        run_minute = total_minutes % 60
+
+        _scheduler.add_job(
+            collect_batch, 
+            CronTrigger(hour=run_hour, minute=run_minute),
+            args=[i]
+        )
+
+    # 30-minute Alert Pulse
+    _scheduler.add_job(check_price_alerts, IntervalTrigger(minutes=30))
+
+    # Daily 5 AM model refresh
+    _scheduler.add_job(retrain_models, CronTrigger(hour=5, minute=0))
 
     _scheduler.start()
-    logger.info("✅ Scheduler started — 6 jobs running")
-    logger.info("   • Price alerts: every 30 min")
-    logger.info("   • Check-in reminders: every hour")
-    logger.info("   • Notification flush: every 5 min")
-    logger.info("   • ML retraining: daily at 2am IST")
-    logger.info("   • Route price update: every 6 hours")
-    logger.info("   • Expire old alerts: daily midnight IST")
-
-
-def stop_scheduler():
-    _scheduler.shutdown(wait=False)
-    logger.info("Scheduler stopped")
+    logger.info("🚀 SkyMind Background Scheduler Active.")

@@ -371,3 +371,4 @@ export function getAirlineLogo(iataCode: string): string {
 export function getAirlineLogoRect(iataCode: string): string {
   return `https://content.airhex.com/content/logos/airlines_${iataCode.toUpperCase()}_100_25_r.png`;
 }
+export const searchAirports = searchAirportsAPI;

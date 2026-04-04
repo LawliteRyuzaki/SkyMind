@@ -16,6 +16,17 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
 from datetime import datetime
+import time
+
+def safe_send(func, *args, retries=2, delay=1):
+    for _ in range(retries):
+        try:
+            if func(*args):
+                return True
+        except Exception as e:
+            logger.error(f"Notification error: {e}")
+        time.sleep(delay)
+    return False
 
 logger = logging.getLogger(__name__)
 
@@ -500,7 +511,10 @@ class WhatsAppService:
         if not (self.twilio_sid and self.twilio_token): return False
         try:
             from twilio.rest import Client
-            to = f"whatsapp:+91{phone.replace('+91','').strip()}"
+            phone = phone.replace("+", "").strip()
+            if not phone.startswith("91"):
+                phone = "91" + phone
+            to = f"whatsapp:+{phone}"
             msg = Client(self.twilio_sid,self.twilio_token).messages.create(
                 body=message, from_=self.wa_from, to=to)
             logger.info("WhatsApp sent -> %s | %s", phone, msg.sid)
@@ -632,12 +646,19 @@ class NotificationDispatcher:
             "current_price": current_price,
             "cabin":         alert.get("cabin_class","Economy"),
         }
-        if alert.get("notify_email") and alert.get("email"):
-            self.email.send_price_alert(alert["email"], d)
-        if alert.get("notify_sms") and alert.get("phone"):
-            self.sms.send_price_alert(alert["phone"], d)
-        if alert.get("notify_whatsapp") and alert.get("phone"):
-            self.whatsapp.send_price_alert(alert["phone"], d)
+        email = alert.get("email")
+        phone = alert.get("phone")
+        # 1️⃣ EMAIL FIRST
+        if alert.get("notify_email") and email:
+            if safe_send(self.email.send_price_alert, email, d):
+                return
+        #   2️⃣ SMS FALLBACK
+        if alert.get("notify_sms") and phone:
+            if safe_send(self.sms.send_price_alert, phone, d):
+                return
+        # 3️⃣ WHATSAPP LAST
+        if alert.get("notify_whatsapp") and phone:
+            safe_send(self.whatsapp.send_price_alert, phone, d)
 
     def send_checkin_reminder(self, booking: dict, profile: dict):
         d = self._booking_data(booking)
