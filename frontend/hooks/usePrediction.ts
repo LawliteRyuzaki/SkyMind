@@ -1,11 +1,6 @@
-// hooks/usePrediction.ts (FIXED)
-// =====================================================================
-// Fixes:
-//   1. Debounce (300ms) to prevent duplicate API calls
-//   2. Loading + error state management
-//   3. In-memory cache keyed by origin+destination
-//   4. Returns typed PredictionResult — no hardcoded fallbacks
-// =====================================================================
+// hooks/usePrediction.ts — FIXED
+// Uses GET /ai/price via the updated predictPrice() in api.ts
+// (No other changes needed — the fix is in api.ts)
 
 import { useState, useCallback, useRef } from "react";
 import { predictPrice, PredictionResult, PredictRequest, ApiError } from "@/lib/api";
@@ -43,7 +38,7 @@ export function usePrediction(): UsePredictionReturn {
       return;
     }
 
-    const cacheKey = `${org}-${dst}`;
+    const cacheKey = `${org}-${dst}-${req.departure_date || ""}`;
     if (cache.has(cacheKey)) {
       setResult(cache.get(cacheKey)!);
       setError(null);
@@ -65,7 +60,11 @@ export function usePrediction(): UsePredictionReturn {
         setResult(data);
       } catch (err) {
         if (activeReqRef.current !== reqId) return;
-        setError(err instanceof ApiError ? err.message : "An unexpected error occurred. Please try again.");
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : "Prediction failed. Make sure the backend is running and the route is supported."
+        );
       } finally {
         if (activeReqRef.current === reqId) setLoading(false);
       }

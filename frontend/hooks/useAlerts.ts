@@ -1,8 +1,6 @@
-// hooks/useAlerts.ts — FIXED with localStorage persistence
-// =====================================================================
-// Alerts now persist across page reloads via localStorage.
-// Falls back gracefully if backend is unreachable.
-// =====================================================================
+// hooks/useAlerts.ts — FIXED
+// Now passes userId to backend GET /alerts/user/:id
+// Falls back to localStorage when backend is unreachable.
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import {
@@ -14,7 +12,7 @@ import {
   ApiError,
 } from "@/lib/api";
 
-const POLL_INTERVAL_MS = 30_000; // 30 seconds
+const POLL_INTERVAL_MS = 30_000;
 const STORAGE_KEY = "skymind_price_alerts";
 
 interface UseAlertsReturn {
@@ -27,10 +25,8 @@ interface UseAlertsReturn {
   lastChecked: Date | null;
 }
 
-// Track which alert IDs we've already notified
 const _notifiedIds = new Set<string>();
 
-// ── localStorage helpers ──────────────────────────────────────────────────
 function loadAlertsFromStorage(): AlertRecord[] {
   if (typeof window === "undefined") return [];
   try {
@@ -47,28 +43,32 @@ function saveAlertsToStorage(alerts: AlertRecord[]) {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(alerts));
-  } catch {
-    // Storage quota exceeded or unavailable — silent fail
-  }
+  } catch { /* quota exceeded */ }
 }
 
 function removeAlertFromStorage(id: string) {
-  const existing = loadAlertsFromStorage();
-  saveAlertsToStorage(existing.filter((a) => a.id !== id));
+  saveAlertsToStorage(loadAlertsFromStorage().filter((a) => a.id !== id));
 }
 
 function upsertAlertInStorage(alert: AlertRecord) {
   const existing = loadAlertsFromStorage();
   const idx = existing.findIndex((a) => a.id === alert.id);
-  if (idx >= 0) {
-    existing[idx] = alert;
-  } else {
-    existing.push(alert);
-  }
+  if (idx >= 0) existing[idx] = alert;
+  else existing.push(alert);
   saveAlertsToStorage(existing);
 }
 
-// ── Hook ─────────────────────────────────────────────────────────────────
+// Get current user id from Supabase session (async, best-effort)
+async function getCurrentUserId(): Promise<string | undefined> {
+  try {
+    const { supabase } = await import("@/lib/supabase");
+    const { data } = await supabase.auth.getSession();
+    return data.session?.user?.id;
+  } catch {
+    return undefined;
+  }
+}
+
 export function useAlerts(): UseAlertsReturn {
   const [alerts, setAlerts] = useState<AlertRecord[]>(() => loadAlertsFromStorage());
   const [triggered, setTriggered] = useState<AlertRecord[]>([]);
@@ -79,18 +79,14 @@ export function useAlerts(): UseAlertsReturn {
 
   const poll = useCallback(async () => {
     try {
-      const data = await checkAlerts();
+      const userId = await getCurrentUserId();
+      const data = await checkAlerts(userId);
 
-      // Merge backend data with local storage
-      const merged = data.alerts;
-      setAlerts(merged);
+      setAlerts(data.alerts);
       setTriggered(data.triggered);
       setLastChecked(new Date());
+      saveAlertsToStorage(data.alerts);
 
-      // Persist to localStorage
-      saveAlertsToStorage(merged);
-
-      // Fire notifications for newly triggered alerts
       for (const alert of data.triggered) {
         if (!_notifiedIds.has(alert.id)) {
           _notifiedIds.add(alert.id);
@@ -98,37 +94,33 @@ export function useAlerts(): UseAlertsReturn {
         }
       }
     } catch {
-      // Backend unreachable — use localStorage data
+      // Backend unreachable — use localStorage
       const stored = loadAlertsFromStorage();
       if (stored.length > 0) {
         setAlerts(stored);
-        // Mark any triggered based on stored current_price
-        const trig = stored.filter((a) => a.triggered);
-        setTriggered(trig);
+        setTriggered(stored.filter((a) => a.triggered));
       }
     }
   }, []);
 
   useEffect(() => {
-    // Initial load from storage immediately (no flicker)
     const stored = loadAlertsFromStorage();
     if (stored.length > 0) setAlerts(stored);
-
-    // Then poll backend
     poll();
     timerRef.current = setInterval(poll, POLL_INTERVAL_MS);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [poll]);
 
   const addAlert = useCallback(async (req: SetAlertRequest) => {
     setLoading(true);
     setError(null);
     try {
+      // Inject current userId if not provided
+      if (!req.user_id) {
+        req.user_id = await getCurrentUserId();
+      }
       const res = await apiSetAlert(req);
 
-      // Create optimistic local record immediately
       const localAlert: AlertRecord = {
         id: res.alert_id,
         origin: req.origin.toUpperCase(),
@@ -142,12 +134,7 @@ export function useAlerts(): UseAlertsReturn {
       };
 
       upsertAlertInStorage(localAlert);
-      setAlerts((prev) => {
-        const without = prev.filter((a) => a.id !== res.alert_id);
-        return [...without, localAlert];
-      });
-
-      // Re-poll to get enriched data from backend
+      setAlerts((prev) => [...prev.filter((a) => a.id !== res.alert_id), localAlert]);
       await poll();
       return { ok: true, message: res.message };
     } catch (err) {
@@ -160,22 +147,17 @@ export function useAlerts(): UseAlertsReturn {
   }, [poll]);
 
   const removeAlert = useCallback(async (id: string) => {
-    // Optimistic removal from UI & storage immediately
     setAlerts((prev) => prev.filter((a) => a.id !== id));
     removeAlertFromStorage(id);
     _notifiedIds.delete(id);
-
     try {
       await apiDeleteAlert(id);
-    } catch {
-      // If backend fails, local removal still stands
-    }
+    } catch { /* local removal still stands */ }
   }, []);
 
   return { alerts, triggered, loading, error, addAlert, removeAlert, lastChecked };
 }
 
-// ── Notification helper ────────────────────────────────────────────────────
 function _notify(alert: AlertRecord) {
   const title = `🎯 Price Alert: ${alert.origin} → ${alert.destination}`;
   const body = `Current price ₹${alert.current_price?.toLocaleString("en-IN")} is at or below your target ₹${alert.target_price.toLocaleString("en-IN")}!`;
@@ -189,6 +171,4 @@ function _notify(alert: AlertRecord) {
       });
     }
   }
-
-  console.info("[SkyMind Alert]", title, body);
 }

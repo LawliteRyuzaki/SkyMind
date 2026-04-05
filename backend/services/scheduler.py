@@ -60,6 +60,7 @@ def fetch_and_store_flights(origin, destination, date_str):
             max_results=5
         ))
 
+        # Handle different potential return types from amadeus_service
         data = res.get("data", []) if isinstance(res, dict) else []
         if not data:
             return None
@@ -154,15 +155,30 @@ def check_price_alerts():
     from services.notifications import dispatcher
     logger.info("⏰ Scanning active Price Alerts...")
     try:
-        alerts = db.get_active_alerts()
+        # FIXED: Directly query Supabase to avoid missing method error
+        res = db.supabase.table("price_alerts") \
+            .select("*") \
+            .eq("status", "ACTIVE") \
+            .execute()
+        
+        alerts = res.data or []
         for alert in alerts:
             current_price = get_price(
                 alert["origin_code"], 
                 alert["destination_code"], 
                 alert["departure_date"]
             )
+            
             if current_price and current_price <= alert["target_price"]:
+                logger.info(f"🎯 Alert Triggered for {alert.get('email', 'User')}")
                 dispatcher.send_price_alert(alert, current_price)
+                
+                # Update status so we don't double-notify
+                db.supabase.table("price_alerts") \
+                    .update({"status": "TRIGGERED"}) \
+                    .eq("id", alert["id"]) \
+                    .execute()
+
     except Exception as e:
         logger.error(f"Alert check failed: {e}")
 
@@ -177,13 +193,13 @@ def retrain_models():
         logger.error(f"Maintenance retraining failed: {e}")
 
 # ==========================================
-# 🚦 STARTUP LOGIC (FIXED)
+# 🚦 STARTUP LOGIC
 # ==========================================
 def start_scheduler():
     if _scheduler.running:
         return
 
-    # Staggered Batch Collection (Calculates rollover minutes safely)
+    # FIXED: Staggered Batch Collection (Calculates rollover minutes safely)
     base_hour = 1
     for i in range(len(ROUTE_BATCHES)):
         total_minutes = i * 20
