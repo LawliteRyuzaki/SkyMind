@@ -24,13 +24,11 @@ IST = pytz.timezone("Asia/Kolkata")
 # ══════════════════════════════════════════════════════════════════════
 
 def _adjust_prediction(price: float) -> float:
-    """Clamp to 2026 domestic price range (matches floor/ceiling logic)."""
     return round(max(2800.0, min(45_000.0, price)), 2)
 
 
 def _get_recent_prices(origin: str, destination: str) -> list[float]:
     try:
-        # Optimized to pull from history for real-time market blending
         res = (
             db.supabase.table("price_history")
             .select("price")
@@ -52,27 +50,22 @@ def _get_market_median(prices: list[float]) -> float | None:
 
 
 def _calculate_confidence(recent_count: int, volatility: float, is_live_boost: bool = False) -> float:
-    # 2026 Confidence Algorithm with Live Weighting
     base = min(recent_count / 15, 1) * 65
     stability = max(0.0, 30 - (volatility / 1500))
-    
-    # Add a bonus to confidence if we are using weighted live data
     live_bonus = 5.0 if is_live_boost else 0.0
-    
     return round(max(25.0, min(98.0, base + stability + live_bonus)), 2)
 
 
 def _get_smart_recommendation(current: float, predicted: float, confidence: float) -> str:
-    """Professional recommendation strings without emojis for clean UI."""
     if confidence < 40:
         return "NEUTRAL"
-    
+
     diff = predicted - current
     if diff > 1200:
-        return "BUY NOW"
+        return "BUY_NOW"   # ✅ FIXED
     if diff < -1200:
         return "WAIT"
-    
+
     return "OPTIMIZED PRICE"
 
 
@@ -86,10 +79,6 @@ async def predict_price_get(
     destination: str,
     departure_date: str,
 ):
-    """
-    GET-based price prediction for widgets and dashboards.
-    Matches the locked 2026 XGBoost feature set with Live-Weighting.
-    """
     try:
         predictor = get_predictor()
         origin = origin.upper().strip()
@@ -103,7 +92,6 @@ async def predict_price_get(
         except ValueError:
             raise HTTPException(400, detail="Invalid date — use YYYY-MM-DD")
 
-        # ── Route context ──────────────────────────────────────────────
         route = (
             db.supabase.table("routes")
             .select("*")
@@ -117,13 +105,11 @@ async def predict_price_get(
 
         route_data = route.data[0]
 
-        # ── Build features ────────────────────────────────────────────
         now_ist = datetime.now(IST)
         today_ist = now_ist.date()
         days_until_dep = max((dep_date_obj - today_ist).days, 0)
         hour = now_ist.hour
 
-        # Calculate Price Changes for Features
         recent_prices = _get_recent_prices(origin, destination)
         p0 = recent_prices[0] if len(recent_prices) >= 1 else 0.0
         p1 = recent_prices[1] if len(recent_prices) >= 2 else p0
@@ -132,45 +118,43 @@ async def predict_price_get(
         airlines = route_data.get("airlines") or ["AI"]
         primary_airline = airlines[0] if isinstance(airlines, list) and airlines else "AI"
 
-        # 🎯 MATCHING FEATURE SET (is_live updated to 2 for priority logic)
         features = {
             "origin_code": origin,
             "destination_code": destination,
             "airline_code": primary_airline,
             "days_until_dep": float(days_until_dep),
-            "urgency": 1 / (days_until_dep + 1), 
+            "urgency": 1 / (days_until_dep + 1),
             "day_of_week": dep_date_obj.weekday(),
             "month": dep_date_obj.month,
             "week_of_year": dep_date_obj.isocalendar()[1],
             "hour_of_day": hour,
             "is_peak_hour": 1 if hour in [7, 8, 9, 18, 19, 20, 21] else 0,
-            "is_live": 2, # 2026 priority requirement
-            "seats_available": 30, 
+            "is_live": 2,
+            "seats_available": 30,
             "price_change_1d": float(p0 - p1),
             "price_change_3d": float(p0 - p3),
             "demand_score": 0.85 if days_until_dep < 7 else 0.5,
             "seasonality_factor": 1.25 if dep_date_obj.month in [4, 5, 10, 12] else 1.0,
         }
 
-        # ── Prediction & Market Blending ──────────────────────────────
         model_price = predictor.predict(features)
         market_median = _get_market_median(recent_prices)
 
-        # Market-Aware Smoothing (Aggressive for Live-Weighting)
         if market_median:
-            live_weight = min(len(recent_prices) / 10, 0.75) 
+            live_weight = min(len(recent_prices) / 10, 0.75)
             final_price = (model_price * (1 - live_weight)) + (market_median * live_weight)
         else:
             final_price = model_price
 
         final_price = _adjust_prediction(final_price)
 
-        # ── Intelligence Output ───────────────────────────────────────
         volatility = float(np.std(recent_prices)) if len(recent_prices) > 1 else 800.0
         confidence = _calculate_confidence(len(recent_prices), volatility, is_live_boost=True)
-        
-        # Reference point for recommendation
+
         current_ref = p0 if p0 > 0 else (market_median if market_median else final_price * 0.95)
+
+        # ✅ NEW: probability of increase
+        prob_increase = max(0.0, min(1.0, (final_price - current_ref) / max(final_price, 1)))
 
         return {
             "status": "success",
@@ -179,7 +163,8 @@ async def predict_price_get(
                 "destination": destination,
                 "predicted_price": final_price,
                 "intelligence": {
-                    "confidence": f"{confidence}%",
+                    "confidence": confidence,  # ✅ FIXED (number)
+                    "prob_increase": prob_increase,  # ✅ ADDED
                     "recommendation": _get_smart_recommendation(current_ref, final_price, confidence),
                     "market_status": "VOLATILE" if volatility > 1200 else "STABLE",
                     "days_to_go": days_until_dep,
@@ -198,27 +183,23 @@ async def predict_price_get(
         traceback.print_exc()
         raise HTTPException(500, detail="Intelligence Engine error.")
 
+
 # ══════════════════════════════════════════════════════════════════════
-# POST /ai/train-dedicated-2026 (Automation Route)
+# POST /ai/train-dedicated-2026
 # ══════════════════════════════════════════════════════════════════════
 
 @router.post("/train-dedicated-2026", tags=["AI Automation"])
 async def trigger_training(request: Request):
-    """
-    Dedicated endpoint for GitHub Actions to trigger daily ML retraining.
-    Protected by CRON_SECRET environment variable.
-    """
     auth_header = request.headers.get("Authorization")
     secret_key = os.getenv("CRON_SECRET")
-    
+
     if not auth_header or auth_header != f"Bearer {secret_key}":
         raise HTTPException(status_code=401, detail="Unauthorized")
-    
+
     try:
-        # Import inside function to avoid circular dependencies
         from ml.price_model import get_predictor
         predictor = get_predictor()
-        predictor.train() 
+        predictor.train()
         return {"status": "success", "message": "Model retrained with 2026 weighted logic"}
     except Exception:
         traceback.print_exc()

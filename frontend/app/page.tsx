@@ -6,7 +6,7 @@ import NavBar from "@/components/layout/NavBar";
 import FlightSearchForm from "@/components/flights/FlightSearchForm";
 import PopularDestinations from "@/components/flights/PopularDestinations";
 
-// ─── Counter animation ────────────────────────────────────────────────
+// ── Counter animation ────────────────────────────────────────────────
 function Counter({ to, suf }: { to: number; suf: string }) {
   const [val, setVal] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
@@ -28,14 +28,12 @@ function Counter({ to, suf }: { to: number; suf: string }) {
   return <div ref={ref}>{val}<span style={{ color: "var(--red)" }}>{suf}</span></div>;
 }
 
-// ─── Ticker items ─────────────────────────────────────────────────────
 const TICKER = [
-  "Amadeus GDS", "XGBoost ML", "Air India Routes", "Live Fare Data",
+  "GET /ai/price", "XGBoost ML", "Live Inference", "Amadeus GDS",
   "90+ Indian Airports", "FastAPI Backend", "Supabase", "Razorpay PCI-DSS",
-  "scikit-learn", "Vercel Edge", "APScheduler", "Price Intelligence",
+  "Real-time Predictions", "Vercel Edge", "APScheduler", "Price Intelligence",
 ];
 
-// ─── SVG Icons ────────────────────────────────────────────────────────
 const ArrowRight = ({ size = 14 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
     <path d="M5 12h14M12 5l7 7-7 7" />
@@ -48,22 +46,17 @@ const TrendingUpIcon = ({ size = 18 }) => (
     <polyline points="16 7 22 7 22 13" />
   </svg>
 );
-
 const BarChartIcon = ({ size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="18" y1="20" x2="18" y2="10" />
-    <line x1="12" y1="20" x2="12" y2="4" />
-    <line x1="6" y1="20" x2="6" y2="14" />
+    <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" />
   </svg>
 );
-
 const BellIcon = ({ size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
     <path d="M13.73 21a2 2 0 01-3.46 0" />
   </svg>
 );
-
 const CreditCardIcon = ({ size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <rect x="1" y="4" width="22" height="16" rx="2" />
@@ -71,11 +64,30 @@ const CreditCardIcon = ({ size = 18 }) => (
   </svg>
 );
 
-const PlaneIcon = ({ size = 11, color = "var(--red)" }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
-    <path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19.5 2.5S18 2 16.5 3.5L13 7 4.8 6.2c-.5-.1-.9.1-1.1.5L2 8.9c-.2.4-.1.9.2 1.2l4.6 4.1-1.5 6.4 2.8 2.8 5.3-3.2 4.1 4.6c.3.4.8.5 1.2.2l1.1-1.2c.4-.2.6-.6.5-1.1z" />
-  </svg>
-);
+// ── Price Insight Card — replaces the route graph ────────────────────
+function PriceInsightCard({ route, origin, dest, price, change, trend }: {
+  route: string; origin: string; dest: string; price: string; change: string; trend: "up" | "down" | "stable";
+}) {
+  const trendColor = trend === "up" ? "#E11D48" : trend === "down" ? "#16A34A" : "#2563EB";
+  const trendIcon = trend === "up" ? "↑" : trend === "down" ? "↓" : "→";
+  return (
+    <div style={{ background: "var(--white)", borderRadius: 12, padding: "16px 18px", border: "1px solid var(--grey-0)", transition: "all .2s" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+        <div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--grey-3)", marginBottom: 5 }}>{route}</div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 700, color: "var(--charcoal)", letterSpacing: ".04em" }}>
+            {origin} <span style={{ color: "var(--grey-3)" }}>→</span> {dest}
+          </div>
+        </div>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, color: trendColor, background: `${trendColor}10`, border: `1px solid ${trendColor}30`, padding: "2px 8px", borderRadius: "var(--r-full)" }}>
+          {trendIcon} {change}
+        </span>
+      </div>
+      <div style={{ fontFamily: "var(--font-sans)", fontWeight: 800, fontSize: "1.5rem", letterSpacing: "-0.04em", color: "var(--charcoal)" }}>{price}</div>
+      <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--grey-3)", marginTop: 3 }}>AI predicted price</div>
+    </div>
+  );
+}
 
 export default function HomePage() {
   return (
@@ -84,62 +96,43 @@ export default function HomePage() {
 
       {/* ── HERO ── */}
       <div className="hero">
-        {/* Left: Headline + stats */}
         <div className="hero-left a1">
           <div className="hero-issue">Vol. 1 — AI Flight Intelligence Platform</div>
-
           <h1 className="hero-title">
-            FLY<br />
-            SMARTER
-            <span className="serif-line">
-              with artificial<br />intelligence.
-            </span>
+            FLY<br />SMARTER
+            <span className="serif-line">with artificial<br />intelligence.</span>
           </h1>
-
           <p className="hero-desc">
             XGBoost ML predicts the exact moment to book across 90+ Indian airports.
-            Live Amadeus GDS fares, 30-day price forecasts, and smart alerts — built for India.
+            Live Amadeus GDS fares, 30-day price forecasts, and smart alerts.
           </p>
-
           <div className="hero-ctas">
-            <Link href="/flights" className="btn btn-primary">
-              Search flights <ArrowRight />
-            </Link>
-            <Link href="/predict" className="btn btn-outline">
-              View AI forecast
-            </Link>
+            <Link href="/flights" className="btn btn-primary">Search flights <ArrowRight /></Link>
+            <Link href="/predict" className="btn btn-outline">AI forecast</Link>
           </div>
-
-          {/* Stats */}
           <div className="hero-stats">
             {[
-              { to: 2, suf: "M+", label: "Fares analysed" },
-              { to: 38, suf: "%",  label: "Average savings" },
-              { to: 94, suf: "%",  label: "AI accuracy" },
-            ].map((s) => (
+              { to: 2,  suf: "M+", label: "Fares analysed" },
+              { to: 38, suf: "%",  label: "Avg savings"    },
+              { to: 94, suf: "%",  label: "AI accuracy"    },
+            ].map(s => (
               <div key={s.label} className="hero-stat">
-                <div className="hero-stat-num">
-                  <Counter to={s.to} suf={s.suf} />
-                </div>
+                <div className="hero-stat-num"><Counter to={s.to} suf={s.suf} /></div>
                 <div className="hero-stat-label">{s.label}</div>
               </div>
             ))}
           </div>
         </div>
-
-        {/* Right: Search form */}
         <div className="hero-right a2">
           <div className="hero-right-title">FIND YOUR FLIGHT</div>
-          <div className="hero-right-sub" style={{ fontFamily: "var(--font-mono)" }}>
-            Powered by Amadeus GDS + SkyMind AI
-          </div>
+          <div className="hero-right-sub">Powered by Amadeus GDS + SkyMind AI</div>
           <FlightSearchForm />
-          <div style={{ marginTop: "16px", display: "flex", alignItems: "center", gap: "12px" }}>
-            <div style={{ height: "1px", flex: 1, background: "var(--grey-0)" }} />
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--grey-2)", letterSpacing: "0.10em", textTransform: "uppercase" }}>
-              AI-enhanced · XGBoost ML
+          <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ height: 1, flex: 1, background: "var(--grey-0)" }} />
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--grey-2)", letterSpacing: ".1em", textTransform: "uppercase" }}>
+              GET /ai/price · XGBoost ML
             </span>
-            <div style={{ height: "1px", flex: 1, background: "var(--grey-0)" }} />
+            <div style={{ height: 1, flex: 1, background: "var(--grey-0)" }} />
           </div>
         </div>
       </div>
@@ -153,43 +146,33 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* ── HOW IT WORKS ── */}
+      {/* ── HOW IT WORKS — price insight cards replace route graph ── */}
       <div className="how-section">
         <div className="wrap">
-          <div className="section-eyebrow" style={{ marginBottom: "40px" }}>
+          <div className="section-eyebrow" style={{ marginBottom: 40 }}>
             <span className="label">How SkyMind works</span>
             <div className="section-eyebrow-line" />
             <span className="label-red">03 systems</span>
           </div>
 
           <div className="how-grid">
-            {/* Left: Copy */}
+            {/* Left: copy */}
             <div className="how-left">
-              <h2 style={{
-                fontFamily: "var(--font-sans)",
-                fontWeight: 800,
-                fontSize: "clamp(2.5rem,5vw,4rem)",
-                letterSpacing: "-0.04em",
-                lineHeight: 0.92,
-                color: "var(--charcoal)",
-                marginBottom: "20px",
-              }}>
+              <h2 style={{ fontFamily: "var(--font-sans)", fontWeight: 800, fontSize: "clamp(2.5rem,5vw,4rem)", letterSpacing: "-0.04em", lineHeight: 0.92, color: "var(--charcoal)", marginBottom: 20 }}>
                 NOT JUST<br />SEARCH.
-                <span style={{ display: "block", fontFamily: "var(--font-serif)", fontStyle: "italic", color: "var(--red)", fontSize: "clamp(1.4rem,3.2vw,2.8rem)", marginTop: "6px", fontWeight: 400, lineHeight: 1.2 }}>
+                <span style={{ display: "block", fontFamily: "var(--font-serif)", fontStyle: "italic", color: "var(--red)", fontSize: "clamp(1.4rem,3.2vw,2.8rem)", marginTop: 6, fontWeight: 400, lineHeight: 1.2 }}>
                   Intelligence.
                 </span>
               </h2>
-
-              <p style={{ fontSize: "14px", color: "var(--grey-4)", lineHeight: "1.75", marginBottom: "32px", maxWidth: "400px" }}>
-                SkyMind layers three AI systems on top of live Amadeus fare data
-                to surface deals that ordinary booking engines leave on the table.
+              <p style={{ fontSize: 14, color: "var(--grey-4)", lineHeight: 1.75, marginBottom: 32, maxWidth: 400 }}>
+                SkyMind layers the GET /ai/price endpoint — our most accurate inference model —
+                on top of live Amadeus fare data to surface deals before prices move.
               </p>
-
               {[
                 { n: "01", title: "Live fare ingestion",    text: "Amadeus GDS feeds pulled on demand across 90+ Indian airports and key international hubs." },
-                { n: "02", title: "XGBoost scoring engine", text: "scikit-learn + XGBoost model scores each fare: Book Now, Wait, or Monitor. 94% accuracy on test set." },
-                { n: "03", title: "30-Day price forecast",  text: "Deterministic route-seeded forecast with confidence intervals — see price trajectory before booking." },
-              ].map((s) => (
+                { n: "02", title: "GET /ai/price inference", text: "XGBoost model scored with live weighting. Confidence, recommendation, and market status — fresh every call." },
+                { n: "03", title: "30-Day price forecast",  text: "POST /predict generates a deterministic route-seeded trajectory. See the price window before you book." },
+              ].map(s => (
                 <div key={s.n} className="how-step">
                   <span className="how-step-num">{s.n}</span>
                   <div className="how-step-text">
@@ -198,73 +181,42 @@ export default function HomePage() {
                   </div>
                 </div>
               ))}
-
-              <div style={{ display: "flex", gap: "10px", marginTop: "28px", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: 10, marginTop: 28, flexWrap: "wrap" }}>
                 <Link href="/flights" className="btn btn-primary">Search flights <ArrowRight /></Link>
                 <Link href="/predict" className="btn btn-outline">See AI forecast</Link>
               </div>
             </div>
 
-            {/* Right: Visualization — DOMESTIC ONLY (DEL→BOM→CCU) */}
+            {/* Right: price insight cards — replacing route graph */}
             <div className="how-right">
-              <div className="viz-wrap">
-                <svg viewBox="0 0 400 200" width="100%" height="220" preserveAspectRatio="xMidYMid meet">
-                  {/* Grid lines */}
-                  {[60, 200, 340].map((x) => (
-                    <line key={x} x1={x} y1="20" x2={x} y2="180" stroke="#E2E8F0" strokeWidth="1" />
-                  ))}
-
-                  {/* Direct route */}
-                  <path
-                    d="M60,145 Q200,25 340,145"
-                    stroke="#1E293B"
-                    strokeWidth="2"
-                    fill="none"
-                    strokeDasharray="700"
-                    strokeDashoffset="700"
-                    style={{ animation: "drawLine 1.4s 0.5s ease forwards" }}
-                  />
-
-                  {/* Via BOM dashed */}
-                  <path d="M60,145 Q130,80 200,110" stroke="#CBD5E1" strokeWidth="1.5" fill="none" strokeDasharray="4,5" />
-                  <path d="M200,110 Q270,65 340,145" stroke="#CBD5E1" strokeWidth="1.5" fill="none" strokeDasharray="4,5" />
-
-                  {/* DEL */}
-                  <rect x="44" y="131" width="32" height="28" rx="4" fill="#1E293B" />
-                  <text x="60" y="150" textAnchor="middle" fill="#fff" fontSize="9" fontFamily="JetBrains Mono, monospace" fontWeight="700">DEL</text>
-
-                  {/* BOM (via stop) */}
-                  <circle cx="200" cy="110" r="14" fill="white" stroke="#E2E8F0" strokeWidth="1.5" />
-                  <text x="200" y="114" textAnchor="middle" fill="#1E293B" fontSize="8" fontFamily="JetBrains Mono, monospace" fontWeight="700">BOM</text>
-
-                  {/* CCU */}
-                  <rect x="324" y="131" width="32" height="28" rx="4" fill="#E11D48" />
-                  <text x="340" y="150" textAnchor="middle" fill="#fff" fontSize="9" fontFamily="JetBrains Mono, monospace" fontWeight="700">CCU</text>
-
-                  {/* Label */}
-                  <text x="150" y="82" fill="#94A3B8" fontSize="8.5" fontFamily="JetBrains Mono, monospace">via BOM — save 18%</text>
-                </svg>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--grey-3)", marginBottom: 14 }}>
+                  Sample predictions · GET /ai/price
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <PriceInsightCard route="Popular · Domestic" origin="DEL" dest="BOM" price="₹4,850" change="+12%" trend="up"     />
+                  <PriceInsightCard route="Trending · Beach"   origin="BOM" dest="GOI" price="₹3,290" change="-5%"  trend="down"   />
+                  <PriceInsightCard route="Stable · Business"  origin="DEL" dest="BLR" price="₹5,100" change="±2%"  trend="stable" />
+                </div>
               </div>
 
-              {/* Savings comparison — DOMESTIC */}
-              <div className="route-savings">
+              {/* Mini stats */}
+              <div className="insight-grid">
                 {[
-                  { label: "Direct DEL→CCU", val: "₹5,800", color: "var(--grey-4)" },
-                  { label: "Via Mumbai",     val: "₹4,750", color: "#059669" },
-                  { label: "You save",       val: "₹1,050", color: "var(--red)" },
-                ].map((r) => (
-                  <div key={r.label} className="route-saving-item">
-                    <div className="route-saving-label">{r.label}</div>
-                    <div className="route-saving-val" style={{ color: r.color }}>{r.val}</div>
+                  { label: "Avg savings vs. direct booking", val: "₹1,200",  color: "#16A34A"         },
+                  { label: "Model confidence (avg)",         val: "87%",      color: "var(--charcoal)" },
+                  { label: "Routes monitored daily",         val: "240+",     color: "var(--charcoal)" },
+                ].map(c => (
+                  <div key={c.label} className="insight-card">
+                    <div className="insight-label">{c.label}</div>
+                    <div className="insight-val" style={{ color: c.color }}>{c.val}</div>
                   </div>
                 ))}
               </div>
 
-              {/* Domestic badge */}
-              <div style={{ marginTop: "12px", display: "flex", justifyContent: "center" }}>
-                <span className="badge badge-off" style={{ fontSize: "10px" }}>
-                  <PlaneIcon size={10} color="var(--grey-3)" />
-                  Domestic India routes · Air India
+              <div style={{ marginTop: 14, display: "flex", justifyContent: "center" }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--grey-2)", letterSpacing: ".1em", textTransform: "uppercase" }}>
+                  Direct flights only · No connecting routes
                 </span>
               </div>
             </div>
@@ -275,39 +227,18 @@ export default function HomePage() {
       {/* ── FEATURES ── */}
       <div className="feat-section">
         <div className="wrap">
-          <div className="section-eyebrow" style={{ marginBottom: "32px" }}>
+          <div className="section-eyebrow" style={{ marginBottom: 32 }}>
             <span className="label">Core capabilities</span>
             <div className="section-eyebrow-line" />
             <span className="label-red">04 systems</span>
           </div>
-
           <div className="feat-grid">
             {[
-              {
-                num: "01 / INTELLIGENCE",
-                title: "ML Price Intelligence",
-                desc: "XGBoost trained on millions of fare datapoints. Predicts price movements with 94% accuracy across Air India domestic routes.",
-                icon: <TrendingUpIcon size={18} />,
-              },
-              {
-                num: "02 / FORECAST",
-                title: "30-Day Price Forecast",
-                desc: "Full price trajectory with confidence bands. See the best and worst booking windows before you commit.",
-                icon: <BarChartIcon size={18} />,
-              },
-              {
-                num: "03 / ALERTS",
-                title: "Smart Price Alerts",
-                desc: "Set a target price. Our scheduler monitors 24/7 and notifies via Email + SMS the moment it's reached.",
-                icon: <BellIcon size={18} />,
-              },
-              {
-                num: "04 / BOOKING",
-                title: "Seamless Booking",
-                desc: "Full Razorpay integration — UPI, cards, netbanking. Instant confirmation with email notifications.",
-                icon: <CreditCardIcon size={18} />,
-              },
-            ].map((f, i) => (
+              { num: "01 / INTELLIGENCE", title: "ML Price Intelligence",   desc: "XGBoost trained on millions of fare datapoints. GET /ai/price gives you confidence score, recommendation, and market status — live.", icon: <TrendingUpIcon size={18} /> },
+              { num: "02 / FORECAST",     title: "30-Day Price Forecast",   desc: "POST /predict generates a full trajectory with confidence bands. See the best and worst booking windows before you commit.", icon: <BarChartIcon size={18} /> },
+              { num: "03 / ALERTS",       title: "Smart Price Alerts",      desc: "Set a target price. Our scheduler monitors 24/7 and notifies via Email + SMS the moment it's reached.", icon: <BellIcon size={18} /> },
+              { num: "04 / BOOKING",      title: "Seamless Booking",        desc: "Full Razorpay integration — UPI, cards, netbanking. Instant confirmation with email notifications.", icon: <CreditCardIcon size={18} /> },
+            ].map(f => (
               <div key={f.num} className="feat-card">
                 <div className="feat-num">{f.num}</div>
                 <div className="feat-icon">{f.icon}</div>
@@ -324,15 +255,15 @@ export default function HomePage() {
         <div className="wrap">
           <div className="dest-header">
             <div>
-              <div className="section-eyebrow" style={{ marginBottom: "8px" }}>
+              <div className="section-eyebrow" style={{ marginBottom: 8 }}>
                 <span className="label">Trending now</span>
-                <div className="section-eyebrow-line" style={{ maxWidth: "60px" }} />
+                <div className="section-eyebrow-line" style={{ maxWidth: 60 }} />
               </div>
               <h2 style={{ fontWeight: 800, fontSize: "clamp(1.8rem,4vw,3rem)", letterSpacing: "-0.04em", color: "var(--charcoal)" }}>
                 POPULAR ROUTES
               </h2>
             </div>
-            <Link href="/flights" className="btn btn-outline" style={{ fontSize: "13px" }}>
+            <Link href="/flights" className="btn btn-outline" style={{ fontSize: 13 }}>
               All routes <ArrowRight size={13} />
             </Link>
           </div>
@@ -340,7 +271,7 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* ── CTA BAND ── */}
+      {/* ── CTA ── */}
       <div className="cta-band">
         <div className="cta-inner">
           <div>
@@ -351,8 +282,8 @@ export default function HomePage() {
             </div>
           </div>
           <div className="cta-btns">
-            <Link href="/flights" className="btn-white" style={{ borderRadius: "8px", letterSpacing: "-0.01em", fontFamily: "var(--font-sans)" }}>Search flights</Link>
-            <Link href="/predict" className="btn-white-outline" style={{ borderRadius: "8px", letterSpacing: "-0.01em", fontFamily: "var(--font-sans)" }}>View predictions</Link>
+            <Link href="/flights" className="btn-white">Search flights</Link>
+            <Link href="/predict" className="btn-white-outline">View predictions</Link>
           </div>
         </div>
       </div>
@@ -364,8 +295,8 @@ export default function HomePage() {
           <span className="footer-copy">© 2026 SkyMind · AI Flight Intelligence · India</span>
           <div className="footer-links">
             <Link href="/flights"    className="footer-link">Search</Link>
-            <Link href="/predict"   className="footer-link">Predict</Link>
-            <Link href="/dashboard" className="footer-link">Dashboard</Link>
+            <Link href="/predict"    className="footer-link">Predict</Link>
+            <Link href="/dashboard"  className="footer-link">Dashboard</Link>
           </div>
         </div>
       </footer>

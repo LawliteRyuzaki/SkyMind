@@ -2,12 +2,13 @@
  * SkyMind — Unified API Client (2026 Production)
  *
  * POST /predict  → returns PredictionResult directly (flat, no wrapper)
- * GET  /ai/price → returns { status, data: PredictionResult }
+ * GET  /ai/price → returns { status, data: { intelligence, meta } }
  *
  * All calls go through apiRequest() which:
  * • Reads base URL from NEXT_PUBLIC_API_BASE_URL → NEXT_PUBLIC_API_URL → localhost:8000
  * • Throws typed ApiError on non-2xx responses
  * • Handles JSON parsing safely
+ * • safePrice() converts Decimal strings from Python backend to numbers
  */
 
 import type {
@@ -72,6 +73,21 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+}
+
+// ─── Safe price parser (handles Python Decimal strings) ───────────────
+/**
+ * Backend XGBoost/Python may return prices as Decimal strings e.g. "5183.35"
+ * This utility safely converts any price value to a JS number.
+ */
+export function safePrice(val: unknown): number {
+  if (typeof val === "number") return val;
+  if (typeof val === "string") {
+    // Strip commas and percentage symbols before parsing
+    const n = parseFloat(val.replace(/,/g, "").replace(/%/g, ""));
+    return isNaN(n) ? 0 : n;
+  }
+  return 0;
 }
 
 // ─── Core fetch helper ────────────────────────────────────────────────
@@ -207,13 +223,16 @@ export async function searchFlights(
 
 // ─── Price Prediction (POST /predict) ────────────────────────────────
 /**
- * Backend POST /predict returns PredictionResult DIRECTLY (flat JSON).
- * No wrapper — confirmed from main.py.
+ * Backend POST /predict returns { status, data: { ... } }.
+ * This mapper aligns the nested 2026 intelligence structure with the UI result type.
  */
+// ONLY showing the FIXED part since rest remains EXACTLY SAME
+
+// ─── Price Prediction (POST /predict) ────────────────────────────────
 export async function predictPrice(
   req: PredictRequest
 ): Promise<PredictionResult> {
-  const result = await apiRequest<PredictionResult>("/predict", {
+  const raw = await apiRequest<any>("/predict", {
     method: "POST",
     body: JSON.stringify({
       ...req,
@@ -222,12 +241,54 @@ export async function predictPrice(
     }),
   });
 
-  // Safety: if backend wrapped it in { data: ... }, unwrap
-  if (result && typeof result === "object" && "data" in result && "status" in result) {
-    return (result as unknown as { data: PredictionResult }).data;
-  }
+  const d = raw?.data || {};
+  const intel = d.intelligence || {};
+
+  // ✅ FIXED: works for BOTH number + string
+  const confidenceRaw = safePrice(intel.confidence);
+  const confidence =
+    confidenceRaw > 1 ? confidenceRaw / 100 : confidenceRaw;
+
+  // ✅ FIXED: safe probability handling
+  const probability =
+    typeof intel.prob_increase === "number"
+      ? intel.prob_increase
+      : safePrice(intel.prob_increase) / 100;
+
+  const result: PredictionResult = {
+    predicted_price: safePrice(d.predicted_price),
+    forecast: normalizeForecast(d.forecast),
+
+    trend: (intel.market_status as Trend) || "STABLE",
+
+    probability_increase: probability,
+
+    confidence: confidence,
+
+    recommendation: (intel.recommendation as any) || "MONITOR",
+
+    reason: String(
+      intel.reason ||
+        (d.meta?.peak_season
+          ? "Peak season pricing active"
+          : "Analyzing market signals")
+    ),
+
+    expected_change_percent: safePrice(d.expected_change_percent),
+  };
 
   return result;
+}
+
+function normalizeForecast(raw: unknown): ForecastPoint[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((p: any) => ({
+    day:   typeof p.day === "number" ? p.day : parseInt(String(p.day), 10) || 0,
+    date:  String(p.date || ""),
+    price: safePrice(p.price),
+    lower: safePrice(p.lower),
+    upper: safePrice(p.upper),
+  }));
 }
 
 // ─── Price Alerts ─────────────────────────────────────────────────────
