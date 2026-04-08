@@ -235,7 +235,7 @@ select.inp { cursor:pointer; background-image:url("data:image/svg+xml,%3Csvg wid
 .conf-bar-fill { height:100%; background:var(--red); transition:width .8s ease; border-radius:2px; }
 
 /* ═══ HERO ═══ */
-.hero { padding-top:60px; display:grid; grid-template-columns:1fr 1fr; min-height:100vh; }
+.hero { padding-top:0px; display:grid; grid-template-columns:1fr 1fr; min-height:100vh; }
 @media(max-width:900px) { .hero { grid-template-columns:1fr; min-height:auto; } }
 .hero-left { padding:64px 64px 64px 32px; display:flex; flex-direction:column; justify-content:center; border-right:1px solid var(--black); }
 @media(max-width:900px) { .hero-left { padding:48px 20px; border-right:none; border-bottom:1px solid var(--black); } }
