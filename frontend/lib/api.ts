@@ -320,12 +320,20 @@ export async function searchFlights(
     origin: resolveCityToIATA(params.origin),
     destination: resolveCityToIATA(params.destination),
     departure_date: params.departure_date,
+
+    // ✅ FIXED
     adults: String(params.adults ?? 1),
+    children: String(params.children ?? 0),
+    infants: String(params.infants ?? 0),
+
     cabin_class: params.cabin_class ?? "ECONOMY",
     currency: params.currency ?? "INR",
     max_results: String(params.max_results ?? 20),
+
     ...(params.return_date ? { return_date: params.return_date } : {}),
   });
+
+  console.log("✈️ SEARCH:", qs.toString()); // keep for debug
 
   return apiRequest<FlightSearchResponse>(`/flights/search?${qs}`);
 }

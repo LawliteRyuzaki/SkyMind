@@ -60,24 +60,35 @@ class AmadeusService:
         destination: str,
         departure_date: str,
         adults: int = 1,
+        children: int = 0,          # ✅ NEW
+        infants: int = 0,           # ✅ NEW
         cabin_class: str = "ECONOMY",
         max_results: int = 20,
+        return_date: str | None = None,   # ✅ NEW
     ) -> dict:
         token = await _get_token()
+
+        params = {
+            "originLocationCode": origin.upper(),
+            "destinationLocationCode": destination.upper(),
+            "departureDate": departure_date,
+            "adults": adults,
+            "children": children,      # ✅ NEW
+            "infants": infants,        # ✅ NEW
+            "travelClass": cabin_class,
+            "max": max_results,
+            "currencyCode": "INR",
+        }
+
+        # ✅ ROUND TRIP SUPPORT
+        if return_date:
+            params["returnDate"] = return_date
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.get(
                 f"{_BASE_URL}/v2/shopping/flight-offers",
                 headers={"Authorization": f"Bearer {token}"},
-                params={
-                    "originLocationCode": origin.upper(),
-                    "destinationLocationCode": destination.upper(),
-                    "departureDate": departure_date,
-                    "adults": adults,
-                    "travelClass": cabin_class,
-                    "max": max_results,
-                    "currencyCode": "INR",
-                },
+                params=params,
             )
 
             if resp.status_code != 200:
@@ -88,7 +99,7 @@ class AmadeusService:
 
             return resp.json()
 
-    # ✅ NEW FUNCTION (correctly placed)
+    # ✅ Airport search (unchanged)
     async def search_airports(self, keyword: str) -> list:
         token = await _get_token()
 
@@ -120,6 +131,7 @@ class AmadeusService:
 
             return results
 
+    # ✅ Formatter (UNCHANGED — still one-way logic)
     def format_for_skymind(self, raw_data: dict) -> list:
         flights = raw_data.get("data", [])
         formatted_list = []
