@@ -114,9 +114,9 @@ export default function HomePage() {
           </div>
           <div className="hero-stats">
             {[
-              { to: 2, suf: "M+", label: "Fares analysed" },
+              { to: 10, suf: "K+", label: "Fares analysed" },
               { to: 38, suf: "%",  label: "Avg savings" },
-              { to: 94, suf: "%",  label: "Model accuracy" },
+              { to: 88, suf: "%",  label: "Model accuracy" },
             ].map(s => (
               <div key={s.label} className="hero-stat">
                 <div className="hero-stat-num"><Counter to={s.to} suf={s.suf} /></div>
